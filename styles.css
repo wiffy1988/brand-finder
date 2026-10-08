@@ -119,6 +119,33 @@ textarea { resize: vertical; min-height: 72px; }
 .banner.warn { background: #fff4d6; border: 1px solid #f0d58a; }
 .banner.sample { background: #fff8e6; border: 1px dashed #e0c47a; color: #6b5420; font-size: 13px; }
 
+.ptr {
+  position: fixed;
+  z-index: 25;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  background: var(--bg);
+  pointer-events: none;
+}
+.ptr-spin {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--line);
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  flex: none;
+}
+.ptr.refreshing .ptr-spin { animation: ptr-spin .7s linear infinite; }
+@keyframes ptr-spin { to { transform: rotate(360deg); } }
+
 .search-bar { margin-bottom: 4px; }
 .search-bar.sticky { position: sticky; top: calc(var(--safe-top) + 48px); z-index: 5; background: var(--bg); padding-bottom: 4px; }
 .search-bar input { background: var(--card); }
@@ -220,6 +247,7 @@ html.standalone .bottom-nav::after {
 }
 html.standalone body {
   padding-bottom: max(12px, calc(var(--nav-h) + var(--safe-bottom) - var(--safe-top)));
+  overscroll-behavior-y: none;
 }
 html.standalone body.detail-mode { padding-bottom: var(--safe-bottom); }
 html.standalone .toast {
