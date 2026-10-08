@@ -12,7 +12,7 @@
   --radius: 14px;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
-  --nav-h: 56px;
+  --nav-h: 44px;
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 [hidden] { display: none !important; }
@@ -285,17 +285,38 @@ textarea { resize: vertical; min-height: 72px; }
   width: 100%;
   background-color: #fffdf8;
   border-top: 1px solid var(--line);
-  /* Safe-area padding is inside the bar, so the cream paints through the
-     home indicator and the icons stay above it. */
-  padding: 4px 0 calc(4px + env(safe-area-inset-bottom, 0px));
+  /* Home-indicator inset only. The extra 4px under the labels (on top of
+     each item's own padding) is what made the bar feel tall. Cream still
+     fills this padding, so there is no page-colored strip under the bar. */
+  padding: 0 0 env(safe-area-inset-bottom, 0px);
 }
 .nav-item {
-  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px;
-  background: none; border: 0; padding: 6px 4px; cursor: pointer;
-  font-family: inherit; font-size: 11px; color: var(--muted);
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  height: var(--nav-h);
+  margin: 0;
+  background: none;
+  border: 0;
+  padding: 3px 2px 2px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.05;
+  color: var(--muted);
 }
 .nav-item.active { color: var(--brand); font-weight: 600; }
-.nav-icon { font-size: 20px; line-height: 1.2; }
+.nav-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 20px;
+  font-size: 20px;
+  line-height: 1;
+}
 
 .toast {
   position: fixed; left: 50%; bottom: calc(var(--nav-h) + var(--safe-bottom) + 16px);
