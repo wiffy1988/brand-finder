@@ -2,10 +2,14 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { SUPABASE_URL, SUPABASE_ANON_KEY, STORAGE_BUCKET } from './config.js';
 
-const APP_VERSION = '3.0.1';
+const APP_VERSION = '3.0.2';
 const MAX_FIND_PHOTOS = 12;
 const IMG_MAX_EDGE = 1600;
 const IMG_QUALITY = 0.85;
+const LOCAL_CACHE_KEY = 'yimai-list-cache-v1';
+const BRAND_COLUMNS = 'id,name,country,founded_year,founder,positioning,story,interesting,price_notes,tags,cover_path,created_at,updated_at';
+const FIND_COLUMNS = 'id,brand_id,notes,found_at,created_at,updated_at';
+const PHOTO_COLUMNS = 'id,find_id,storage_path,sort_order';
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -163,27 +167,76 @@ async function removeStoragePaths(paths) {
 // ---------- Data layer ----------
 let brandsCache = [];
 let findsCache = [];
+let cacheReady = false;
+let loadGen = 0;
 
-async function loadAll() {
-  const { data: brands, error: bErr } = await supabase
-    .from('brands')
-    .select('*')
-    .order('updated_at', { ascending: false });
-  if (bErr) throw bErr;
+function cacheSignature() {
+  return JSON.stringify({ brands: brandsCache, finds: findsCache });
+}
 
-  const { data: finds, error: fErr } = await supabase
-    .from('finds')
-    .select('*, find_photos(*)')
-    .order('found_at', { ascending: false });
-  if (fErr) throw fErr;
+function persistLocalCache() {
+  try {
+    localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify({
+      v: 1,
+      savedAt: Date.now(),
+      brands: brandsCache,
+      finds: findsCache,
+    }));
+  } catch (err) {
+    console.warn('local cache', err);
+  }
+}
 
-  brandsCache = (brands || []).map(mapBrand);
-  findsCache = (finds || []).map(mapFind);
+function hydrateLocalCache() {
+  try {
+    const raw = localStorage.getItem(LOCAL_CACHE_KEY);
+    if (!raw) return false;
+    const data = JSON.parse(raw);
+    if (!data || data.v !== 1 || !Array.isArray(data.brands) || !Array.isArray(data.finds)) return false;
+    brandsCache = data.brands.filter((b) => b && b.id);
+    findsCache = data.finds.filter((f) => f && f.id).map((f) => ({
+      ...f,
+      photos: Array.isArray(f.photos) ? f.photos : [],
+    }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sortFinds() {
   findsCache.sort((a, b) =>
     (b.date || '').localeCompare(a.date || '') ||
     String(b.createdAt || '').localeCompare(String(a.createdAt || ''))
   );
+}
+
+async function loadAll() {
+  const gen = ++loadGen;
+  const [brandsRes, findsRes, photosRes] = await Promise.all([
+    supabase.from('brands').select(BRAND_COLUMNS).order('updated_at', { ascending: false }),
+    supabase.from('finds').select(FIND_COLUMNS).order('found_at', { ascending: false }),
+    supabase.from('find_photos').select(PHOTO_COLUMNS).order('sort_order', { ascending: true }),
+  ]);
+  if (brandsRes.error) throw brandsRes.error;
+  if (findsRes.error) throw findsRes.error;
+  if (photosRes.error) throw photosRes.error;
+  if (gen !== loadGen) return { brands: brandsCache, finds: findsCache };
+
+  const photosByFind = new Map();
+  for (const p of photosRes.data || []) {
+    const list = photosByFind.get(p.find_id);
+    if (list) list.push(p);
+    else photosByFind.set(p.find_id, [p]);
+  }
+  brandsCache = (brandsRes.data || []).map(mapBrand);
+  findsCache = (findsRes.data || []).map((row) =>
+    mapFind({ ...row, find_photos: photosByFind.get(row.id) || [] })
+  );
+  sortFinds();
+  cacheReady = true;
   showNetBanner(null);
+  persistLocalCache();
   return { brands: brandsCache, finds: findsCache };
 }
 
@@ -259,6 +312,8 @@ function $(id) { return document.getElementById(id); }
 
 function hideAllViews() {
   document.querySelectorAll('.view').forEach((v) => { v.hidden = true; });
+  const main = document.querySelector('main');
+  if (main) main.scrollTop = 0;
 }
 
 function showTab(tab) {
@@ -318,7 +373,7 @@ function findMatches(f, q, brandMap) {
 
 // ---------- Brand UI ----------
 async function renderBrandsList(opts) {
-  if (!opts || opts.refresh !== false) {
+  if (opts && opts.refresh === true) {
     try {
       await refreshCaches();
     } catch {
@@ -331,6 +386,10 @@ async function renderBrandsList(opts) {
   const empty = $('brands-empty');
   if (list.length === 0) {
     el.innerHTML = '';
+    if (!cacheReady) {
+      empty.hidden = true;
+      return;
+    }
     empty.hidden = false;
     if (brandsCache.length > 0 && q) {
       empty.innerHTML = `<div class="empty-icon">🔍</div><p>没有匹配「${esc(q)}」的品牌</p>`;
@@ -599,7 +658,7 @@ function clearFindPhotosPending() {
 }
 
 async function renderFindsList(opts) {
-  if (!opts || opts.refresh !== false) {
+  if (opts && opts.refresh === true) {
     try {
       await refreshCaches();
     } catch { /* banner */ }
@@ -611,6 +670,10 @@ async function renderFindsList(opts) {
   const empty = $('finds-empty');
   if (list.length === 0) {
     el.innerHTML = '';
+    if (!cacheReady) {
+      empty.hidden = true;
+      return;
+    }
     empty.hidden = false;
     if (findsCache.length === 0) {
       empty.innerHTML = `<div class="empty-icon">🧥</div><p>还没有淘到的衣服</p><button class="btn primary" data-action="new-find">记录第一件</button>`;
@@ -688,7 +751,6 @@ async function openFindDetail(id, replaceTop) {
 }
 
 async function fillBrandSelect(selectedId) {
-  try { await refreshCaches(); } catch { /* */ }
   const sel = $('ff-brand');
   sel.innerHTML = '<option value="">— 暂不关联 —</option>' +
     brandsCache.map((b) =>
@@ -858,7 +920,6 @@ async function runSearch() {
     empty.innerHTML = `<div class="empty-icon">🔍</div><p>输入关键词，搜索你的品牌库和淘货记录</p>`;
     return;
   }
-  try { await refreshCaches(); } catch { /* */ }
   const brandMap = new Map(brandsCache.map((b) => [b.id, b]));
   const brands = brandsCache.filter((b) => brandMatches(b, q));
   const finds = findsCache.filter((f) => findMatches(f, q, brandMap));
@@ -904,9 +965,8 @@ async function runSearch() {
 }
 
 // ---------- Me / backup ----------
-async function renderMe() {
-  try { await refreshCaches(); } catch { /* */ }
-  const photoCount = findsCache.reduce((n, f) => n + f.photos.length, 0)
+function renderMe() {
+  const photoCount = findsCache.reduce((n, f) => n + ((f.photos && f.photos.length) || 0), 0)
     + brandsCache.filter((b) => b.coverPath).length;
   $('stats-text').textContent =
     `品牌 ${brandsCache.length} 个 · 淘货 ${findsCache.length} 条 · 照片约 ${photoCount} 张（云端）`;
@@ -1079,6 +1139,8 @@ function wirePullToRefresh() {
   if (!el) return;
 
   function atTop() {
+    const main = document.querySelector('main');
+    if (main) return main.scrollTop <= 0;
     return (window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0) <= 0;
   }
 
@@ -1190,6 +1252,10 @@ function wire() {
     if (!confirm('删除这个品牌？关联淘货会解除绑定（照片保留在淘货里）。')) return;
     try {
       await deleteBrandById(id);
+      loadGen++;
+      brandsCache = brandsCache.filter((b) => b.id !== id);
+      for (const f of findsCache) if (f.brandId === id) f.brandId = null;
+      persistLocalCache();
       clearCoverPending();
       toast('已删除');
       stack = [];
@@ -1205,6 +1271,9 @@ function wire() {
     if (!confirm('删除这条淘货记录？')) return;
     try {
       await deleteFindById(id);
+      loadGen++;
+      findsCache = findsCache.filter((f) => f.id !== id);
+      persistLocalCache();
       clearFindPhotosPending();
       toast('已删除');
       stack = [];
@@ -1307,20 +1376,42 @@ function registerSW() {
   navigator.serviceWorker.register('./sw.js').catch(() => {});
 }
 
-async function boot() {
+function rerenderVisibleLists() {
+  if (document.body.classList.contains('detail-mode')) return;
+  if (currentTab === 'brands') renderBrandsList();
+  else if (currentTab === 'finds') renderFindsList();
+  else if (currentTab === 'search') runSearch();
+  else if (currentTab === 'me') renderMe();
+}
+
+async function syncFromNetwork(hadSnapshot) {
+  const before = cacheSignature();
+  try {
+    await refreshCaches();
+    if (brandsCache.length === 0) {
+      try {
+        await ensureSeed();
+      } catch (err) {
+        console.error(err);
+        showNetBanner(netErr(err));
+      }
+    }
+  } catch {
+    // refreshCaches already shows the net banner; keep the local list
+  }
+  const changed = cacheSignature() !== before;
+  cacheReady = true;
+  if (changed || !hadSnapshot) rerenderVisibleLists();
+}
+
+function boot() {
   wire();
   maybeShowInstallTip();
   registerSW();
-  try {
-    await loadAll();
-    await ensureSeed();
-    showTab('brands');
-  } catch (err) {
-    console.error(err);
-    showNetBanner(netErr(err));
-    showTab('brands');
-    // still show empty UI + banner so user can open 我的 / README steps
-  }
+  const hadSnapshot = hydrateLocalCache();
+  cacheReady = hadSnapshot;
+  showTab('brands');
+  syncFromNetwork(hadSnapshot);
 }
 
 if (document.readyState === 'loading') {
