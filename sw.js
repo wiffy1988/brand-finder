@@ -1,5 +1,5 @@
-/* App shell 缓存。只处理同源 GET；Gemini API 请求不经过缓存。 */
-const VERSION = 'bf-v1.0.2';
+/* 衣脉 · App shell 缓存。纯静态，无外部 API。 */
+const VERSION = 'yimai-v2.0.1';
 const SHELL = [
   './',
   'index.html',
@@ -30,7 +30,6 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
 
   if (req.mode === 'navigate') {
-    // 页面：优先联网拿最新版本，离线时用缓存
     event.respondWith(
       fetch(req)
         .then((resp) => {
@@ -43,7 +42,6 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 静态资源：先用缓存，同时后台更新
   event.respondWith(
     caches.match(req).then((cached) => {
       const network = fetch(req)

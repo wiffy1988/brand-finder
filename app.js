@@ -1,754 +1,1178 @@
-'use strict';
-/* 尾货寻牌 — 单页 PWA。无后端：照片直接从浏览器发给 Google Gemini API。 */
+/* 衣脉 · 个人品牌知识库 — 纯本地，无 AI / 无外部 API */
+(() => {
+  'use strict';
 
-const APP_VERSION = '1.0.0';
-const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
-const MAX_PHOTOS = 6;
-const MAX_EDGE = 1280;      // 发给模型的图片最长边
-const JPEG_QUALITY = 0.82;
-const THUMB_EDGE = 240;
-const REQUEST_TIMEOUT_MS = 150000;
+  const APP_VERSION = '2.0.0';
+  const DB_NAME = 'yimai-kb';
+  const DB_VER = 1;
+  const MAX_FIND_PHOTOS = 12;
+  const IMG_MAX_EDGE = 1600;
+  const IMG_QUALITY = 0.85;
 
-const LS = {
-  key: 'bf.apiKey',
-  model: 'bf.model',
-  search: 'bf.search',
-  fallback: 'bf.fallback',
-  fallbackModel: 'bf.fallbackModel',
-  installDismissed: 'bf.installDismissed',
-};
-const DEFAULT_MODEL = 'gemini-2.5-flash';
-const DEFAULT_FALLBACK_MODEL = 'gemini-3.8-flash';
-const PRESET_MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.8-flash', 'gemini-3.5-flash-lite'];
+  // ---------- IndexedDB ----------
+  let db;
 
-const $ = (s) => document.querySelector(s);
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const has = (v) => v !== undefined && v !== null && String(v).trim() !== '' && !/^(未查到|未知|不确定|n\/?a|null|无)$/i.test(String(v).trim());
-
-/* ---------------- 设置 ---------------- */
-const settings = {
-  get key() { return localStorage.getItem(LS.key) || ''; },
-  set key(v) { v ? localStorage.setItem(LS.key, v) : localStorage.removeItem(LS.key); },
-  get model() { return localStorage.getItem(LS.model) || DEFAULT_MODEL; },
-  set model(v) { localStorage.setItem(LS.model, v); },
-  get search() { return localStorage.getItem(LS.search) !== '0'; },
-  set search(v) { localStorage.setItem(LS.search, v ? '1' : '0'); },
-  get fallback() { return localStorage.getItem(LS.fallback) !== '0'; },
-  set fallback(v) { localStorage.setItem(LS.fallback, v ? '1' : '0'); },
-  get fallbackModel() { return localStorage.getItem(LS.fallbackModel) || DEFAULT_FALLBACK_MODEL; },
-  set fallbackModel(v) { localStorage.setItem(LS.fallbackModel, v); },
-};
-
-/* ---------------- IndexedDB 历史 ---------------- */
-const DB_NAME = 'brand-finder';
-const STORE = 'lookups';
-function openDB() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(STORE)) {
-        const os = db.createObjectStore(STORE, { keyPath: 'id' });
-        os.createIndex('createdAt', 'createdAt');
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-async function dbTx(mode, fn) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, mode);
-    const store = tx.objectStore(STORE);
-    let out;
-    Promise.resolve(fn(store)).then((v) => { out = v; });
-    tx.oncomplete = () => resolve(out);
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error);
-  });
-}
-const reqP = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
-const db = {
-  put: (rec) => dbTx('readwrite', (s) => reqP(s.put(rec))),
-  get: (id) => dbTx('readonly', (s) => reqP(s.get(id))),
-  del: (id) => dbTx('readwrite', (s) => reqP(s.delete(id))),
-  clear: () => dbTx('readwrite', (s) => reqP(s.clear())),
-  all: () => dbTx('readonly', (s) => reqP(s.getAll())).then((a) => a.sort((x, y) => y.createdAt - x.createdAt)),
-  count: () => dbTx('readonly', (s) => reqP(s.count())),
-};
-
-/* ---------------- 图片压缩 ---------------- */
-async function loadImage(file) {
-  const url = URL.createObjectURL(file);
-  try {
-    const img = new Image();
-    img.src = url;
-    await img.decode();
-    return img;
-  } finally {
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
-}
-function drawScaled(img, maxEdge) {
-  const w = img.naturalWidth, h = img.naturalHeight;
-  const scale = Math.min(1, maxEdge / Math.max(w, h));
-  const cw = Math.max(1, Math.round(w * scale)), ch = Math.max(1, Math.round(h * scale));
-  const c = document.createElement('canvas');
-  c.width = cw; c.height = ch;
-  const ctx = c.getContext('2d');
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(0, 0, cw, ch);
-  ctx.drawImage(img, 0, 0, cw, ch);
-  return c;
-}
-const canvasToBlob = (c, q) => new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('图片压缩失败'))), 'image/jpeg', q));
-function blobToBase64(blob) {
-  return new Promise((res, rej) => {
-    const fr = new FileReader();
-    fr.onload = () => res(String(fr.result).split(',')[1]);
-    fr.onerror = () => rej(fr.error);
-    fr.readAsDataURL(blob);
-  });
-}
-async function processPhoto(file) {
-  const img = await loadImage(file);
-  const big = await canvasToBlob(drawScaled(img, MAX_EDGE), JPEG_QUALITY);
-  const thumb = drawScaled(img, THUMB_EDGE).toDataURL('image/jpeg', 0.7);
-  return { id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()), blob: big, thumb };
-}
-
-/* ---------------- Gemini 提示词 ---------------- */
-const SYSTEM_PROMPT = `你是户外服装和小众服装品牌的鉴别专家。用户在中国港口城市的外贸尾货市场淘衣服（样衣、尾货、外贸单），然后在小红书分享。他会发来【同一件衣服】的多张照片：logo、水洗标/成分标、吊牌、款号标签、细节等。这些品牌在中国大多比较冷门（例如 SOS Sportswear of Sweden）。
-
-你的任务：
-1. 仔细读出照片里所有文字和标识：品牌名、logo 图形、款号/型号（Style/Art./Model No.）、RN 或 CA 编号、面料成分、产地（Made in）、尺码、季节代码等，作为识别依据。
-2. 如果本次可以使用 Google 搜索，就用它核实品牌信息并寻找这件衣服的同款或相似款在售页面。优先参考品牌官网、维基百科、权威媒体和正规零售商。
-3. 用简体中文回答。
-
-硬性规则：
-- 绝对不要编造。查不到或不确定的字段填 "未查到"，并在 uncertainties 里说明原因。年份、创始人、故事等如果各来源说法不一致，要写明分歧。
-- 区分“照片里直接看到的”和“推测的”，推测要标明。
-- listings 只能放本次搜索中真实看到的商品页面，url 必须原样来自搜索结果；没有搜到就返回空数组 []。绝不能凭记忆或猜测拼凑网址。
-- 价格写原币种金额，并换算成人民币（写明使用的大致汇率）。正价、折扣价、二手价分开说明。
-- 如果本次不能联网搜索：listings 必须是 []；品牌信息只写你非常确定的；价格只给粗略区间并注明“未联网核实”。
-- 有趣的故事要具体（人物、年份、事件），2–3 条，不要空泛的宣传语。
-
-只输出一个 JSON 对象，放在 \`\`\`json 代码块中，不要输出其他任何文字。结构如下（所有值都是字符串或字符串数组）：
-{
-  "brand": "品牌名（原文）",
-  "brand_zh": "常见中文名或简短中文说明，没有就写 未查到",
-  "brand_confidence": "高 / 中 / 低",
-  "brand_evidence": "根据照片里的哪些内容认出来的",
-  "country": "品牌来源国家",
-  "founded": "创立年份",
-  "founder": "创始人",
-  "owner_now": "现在的母公司/归属，没有就写 未查到",
-  "history": "品牌历史，150–300 字",
-  "stories": ["有趣的故事1", "有趣的故事2", "有趣的故事3"],
-  "known_for": "品牌主打什么、定位（价位档次、风格、代表产品线）",
-  "product_name": "这件衣服的款式名称，认不出就写 未查到",
-  "product_model": "款号/型号，照片里看到的或搜索确认的",
-  "product_category": "品类，比如 冲锋衣、抓绒、羽绒服、针织衫",
-  "material": "面料成分（根据水洗标）",
-  "made_in": "产地（根据标签）",
-  "product_evidence": "怎么确认是这个款式的",
-  "listings": [
-    {"title": "商品页标题", "store": "店铺或网站名", "url": "搜索结果里的原样网址", "price": "价格数字", "currency": "币种，比如 EUR", "price_cny": "约合人民币", "match": "同款 / 相似款", "note": "颜色、是否打折等"}
-  ],
-  "price_retail_cny": "正价大约多少人民币（区间）",
-  "price_secondhand_cny": "二手/折扣大约多少人民币，查不到写 未查到",
-  "price_note": "价格说明，包含使用的汇率",
-  "uncertainties": ["不确定的地方1"],
-  "search_keywords": ["适合在淘宝/闲鱼/eBay 搜这件衣服的关键词，英文和中文各一两个"]
-}`;
-
-function buildUserText(n, note, searchOn) {
-  let t = `这是同一件衣服的 ${n} 张照片，请识别品牌和单品。`;
-  if (note && note.trim()) t += `\n用户补充说明：${note.trim()}`;
-  t += searchOn
-    ? '\n本次可以使用 Google 搜索，请先搜索核实再回答。'
-    : '\n注意：本次【不能】联网搜索。listings 必须为 []，不确定的内容一律写 未查到，价格注明“未联网核实”。';
-  return t;
-}
-
-function buildRequestBody(images, note, searchOn) {
-  const parts = [{ text: buildUserText(images.length, note, searchOn) }];
-  for (const b64 of images) parts.push({ inlineData: { mimeType: 'image/jpeg', data: b64 } });
-  const body = {
-    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-    contents: [{ role: 'user', parts }],
-  };
-  if (searchOn) body.tools = [{ googleSearch: {} }];
-  return body;
-}
-
-class GeminiError extends Error {
-  constructor(message, { status = 0, reason = '', code = '', fatal = false } = {}) {
-    super(message);
-    this.status = status; this.reason = reason; this.code = code; this.fatal = fatal;
-  }
-}
-
-async function callGemini(model, body, apiKey, signal) {
-  let resp;
-  try {
-    resp = await fetch(`${API_BASE}/models/${encodeURIComponent(model)}:generateContent`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-      body: JSON.stringify(body),
-      signal,
+  function openDB() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, DB_VER);
+      req.onupgradeneeded = () => {
+        const d = req.result;
+        if (!d.objectStoreNames.contains('brands')) {
+          d.createObjectStore('brands', { keyPath: 'id' });
+        }
+        if (!d.objectStoreNames.contains('finds')) {
+          d.createObjectStore('finds', { keyPath: 'id' });
+        }
+        if (!d.objectStoreNames.contains('photos')) {
+          d.createObjectStore('photos', { keyPath: 'id' });
+        }
+        if (!d.objectStoreNames.contains('meta')) {
+          d.createObjectStore('meta', { keyPath: 'key' });
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
     });
-  } catch (e) {
-    if (e.name === 'AbortError') throw e;
-    throw new GeminiError('连不上 Google 服务器。请确认手机网络能访问 Google（在国内需要开启 VPN）。', { fatal: true, code: 'NETWORK' });
   }
-  let data = null;
-  try { data = await resp.json(); } catch { /* ignore */ }
-  if (!resp.ok) {
-    const err = data && data.error ? data.error : {};
-    const reason = (err.details || []).map((d) => d.reason).filter(Boolean).join(',');
-    const msg = err.message || `HTTP ${resp.status}`;
-    const keyBad = /API_KEY_INVALID|API_KEY_.*EXPIRED/i.test(reason) || /API key not valid|API key expired/i.test(msg);
-    throw new GeminiError(msg, { status: resp.status, reason, code: err.status || '', fatal: keyBad });
-  }
-  return data;
-}
 
-function explainError(e) {
-  if (e.code === 'NETWORK') return e.message;
-  if (e.fatal) return 'API 密钥无效或已过期，请到设置里重新粘贴。';
-  if (e.status === 429) return `请求太频繁或今天的免费额度用完了（429）。稍等一会儿再试。\n${e.message}`;
-  if (e.status === 404) return `这个模型不可用（404），可能你的账号没有权限。\n${e.message}`;
-  if (e.status === 403) return `没有权限（403）。\n${e.message}`;
-  if (e.status >= 500) return `Google 服务器暂时出错（${e.status}），稍后再试。\n${e.message}`;
-  return `${e.status ? `（${e.status}）` : ''}${e.message}`;
-}
-
-function extractResponse(data) {
-  const cand = data && data.candidates && data.candidates[0];
-  if (!cand) {
-    const br = data && data.promptFeedback && data.promptFeedback.blockReason;
-    throw new GeminiError(br ? `请求被拦截：${br}` : '模型没有返回结果');
+  function txDone(tx) {
+    return new Promise((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('aborted'));
+    });
   }
-  const text = ((cand.content && cand.content.parts) || [])
-    .filter((p) => p.text && !p.thought)
-    .map((p) => p.text).join('');
-  if (!text.trim()) throw new GeminiError(`模型没有返回文字（finishReason: ${cand.finishReason || '未知'}）`);
-  const gm = cand.groundingMetadata || {};
-  const sources = (gm.groundingChunks || [])
-    .map((c) => c.web).filter((w) => w && w.uri)
-    .map((w) => ({ uri: w.uri, title: w.title || '' }));
-  return {
-    text,
-    sources,
-    queries: gm.webSearchQueries || [],
-    searchWidget: (gm.searchEntryPoint && gm.searchEntryPoint.renderedContent) || '',
-    finishReason: cand.finishReason || '',
-    usage: data.usageMetadata || null,
-    modelVersion: data.modelVersion || '',
+
+  function storeGet(store, key) {
+    return new Promise((resolve, reject) => {
+      const r = store.get(key);
+      r.onsuccess = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+    });
+  }
+
+  function storeGetAll(store) {
+    return new Promise((resolve, reject) => {
+      const r = store.getAll();
+      r.onsuccess = () => resolve(r.result || []);
+      r.onerror = () => reject(r.error);
+    });
+  }
+
+  function storePut(store, val) {
+    return new Promise((resolve, reject) => {
+      const r = store.put(val);
+      r.onsuccess = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+    });
+  }
+
+  function storeDelete(store, key) {
+    return new Promise((resolve, reject) => {
+      const r = store.delete(key);
+      r.onsuccess = () => resolve();
+      r.onerror = () => reject(r.error);
+    });
+  }
+
+  function storeClear(store) {
+    return new Promise((resolve, reject) => {
+      const r = store.clear();
+      r.onsuccess = () => resolve();
+      r.onerror = () => reject(r.error);
+    });
+  }
+
+  async function getAllBrands() {
+    const tx = db.transaction('brands', 'readonly');
+    return storeGetAll(tx.objectStore('brands'));
+  }
+
+  async function getBrand(id) {
+    const tx = db.transaction('brands', 'readonly');
+    return storeGet(tx.objectStore('brands'), id);
+  }
+
+  async function putBrand(brand) {
+    const tx = db.transaction('brands', 'readwrite');
+    await storePut(tx.objectStore('brands'), brand);
+    await txDone(tx);
+  }
+
+  async function deleteBrand(id) {
+    const brand = await getBrand(id);
+    const finds = (await getAllFinds()).filter((f) => f.brandId === id);
+    const tx = db.transaction(['brands', 'finds', 'photos'], 'readwrite');
+    const bStore = tx.objectStore('brands');
+    const fStore = tx.objectStore('finds');
+    const pStore = tx.objectStore('photos');
+    if (brand && brand.coverPhotoId) await storeDelete(pStore, brand.coverPhotoId);
+    for (const f of finds) {
+      for (const pid of f.photoIds || []) await storeDelete(pStore, pid);
+      await storeDelete(fStore, f.id);
+    }
+    await storeDelete(bStore, id);
+    await txDone(tx);
+  }
+
+  async function getAllFinds() {
+    const tx = db.transaction('finds', 'readonly');
+    return storeGetAll(tx.objectStore('finds'));
+  }
+
+  async function getFind(id) {
+    const tx = db.transaction('finds', 'readonly');
+    return storeGet(tx.objectStore('finds'), id);
+  }
+
+  async function putFind(find) {
+    const tx = db.transaction('finds', 'readwrite');
+    await storePut(tx.objectStore('finds'), find);
+    await txDone(tx);
+  }
+
+  async function deleteFind(id) {
+    const find = await getFind(id);
+    const tx = db.transaction(['finds', 'photos'], 'readwrite');
+    const fStore = tx.objectStore('finds');
+    const pStore = tx.objectStore('photos');
+    if (find) {
+      for (const pid of find.photoIds || []) await storeDelete(pStore, pid);
+    }
+    await storeDelete(fStore, id);
+    await txDone(tx);
+  }
+
+  async function putPhoto(id, blob) {
+    const tx = db.transaction('photos', 'readwrite');
+    await storePut(tx.objectStore('photos'), { id, blob, createdAt: Date.now() });
+    await txDone(tx);
+  }
+
+  async function getPhoto(id) {
+    if (!id) return null;
+    const tx = db.transaction('photos', 'readonly');
+    return storeGet(tx.objectStore('photos'), id);
+  }
+
+  async function deletePhoto(id) {
+    if (!id) return;
+    const tx = db.transaction('photos', 'readwrite');
+    await storeDelete(tx.objectStore('photos'), id);
+    await txDone(tx);
+  }
+
+  async function getMeta(key) {
+    const tx = db.transaction('meta', 'readonly');
+    const row = await storeGet(tx.objectStore('meta'), key);
+    return row ? row.value : undefined;
+  }
+
+  async function setMeta(key, value) {
+    const tx = db.transaction('meta', 'readwrite');
+    await storePut(tx.objectStore('meta'), { key, value });
+    await txDone(tx);
+  }
+
+  // ---------- Helpers ----------
+  function uid() {
+    return (crypto.randomUUID && crypto.randomUUID()) ||
+      ('id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10));
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function parseTags(str) {
+    if (!str) return [];
+    return String(str).split(/[,，\s]+/).map((t) => t.trim()).filter(Boolean);
+  }
+
+  function tagsToStr(tags) {
+    return (tags || []).join(' ');
+  }
+
+  function todayISO() {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
+  function formatDate(iso) {
+    if (!iso) return '';
+    return iso;
+  }
+
+  function blobToDataURL(blob) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(blob);
+    });
+  }
+
+  function dataURLtoBlob(dataURL) {
+    const parts = dataURL.split(',');
+    const mime = (parts[0].match(/:(.*?);/) || [])[1] || 'image/jpeg';
+    const bin = atob(parts[1]);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return new Blob([arr], { type: mime });
+  }
+
+  function compressImage(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        let { width, height } = img;
+        const max = IMG_MAX_EDGE;
+        if (width > max || height > max) {
+          if (width >= height) {
+            height = Math.round(height * (max / width));
+            width = max;
+          } else {
+            width = Math.round(width * (max / height));
+            height = max;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        canvas.toBlob(
+          (blob) => (blob ? resolve(blob) : reject(new Error('压缩失败'))),
+          'image/jpeg',
+          IMG_QUALITY
+        );
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error('图片读取失败'));
+      };
+      img.src = url;
+    });
+  }
+
+  const objectURLs = new Map();
+  async function photoURL(photoId) {
+    if (!photoId) return null;
+    if (objectURLs.has(photoId)) return objectURLs.get(photoId);
+    const row = await getPhoto(photoId);
+    if (!row || !row.blob) return null;
+    const url = URL.createObjectURL(row.blob);
+    objectURLs.set(photoId, url);
+    return url;
+  }
+
+  function revokeAllURLs() {
+    for (const u of objectURLs.values()) URL.revokeObjectURL(u);
+    objectURLs.clear();
+  }
+
+  // ---------- Toast ----------
+  let toastTimer;
+  function toast(msg) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.hidden = true; }, 2200);
+  }
+
+  // ---------- Navigation ----------
+  const TITLES = {
+    brands: '品牌',
+    finds: '淘货',
+    search: '搜索',
+    me: '我的',
   };
-}
 
-function parseJSONLoose(text) {
-  const tryParse = (s) => { try { return JSON.parse(s); } catch { return null; } };
-  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fence) { const v = tryParse(fence[1].trim()); if (v) return v; }
-  const a = text.indexOf('{'), b = text.lastIndexOf('}');
-  if (a >= 0 && b > a) { const v = tryParse(text.slice(a, b + 1)); if (v) return v; }
-  return null;
-}
+  let currentTab = 'brands';
+  let stack = []; // detail/edit stack: { view, title, data }
 
-/* 识别流程：首选模型联网 → 备用模型联网 → 不联网（可在设置里关掉自动降级） */
-function planAttempts() {
-  const primary = settings.model;
-  const plan = [];
-  if (settings.search) {
-    plan.push({ model: primary, search: true });
-    if (settings.fallback) {
-      const alt = primary === 'gemini-2.5-flash' ? 'gemini-2.5-flash-lite'
-        : primary.startsWith('gemini-2.5') ? 'gemini-2.5-flash' : 'gemini-2.5-flash';
-      if (alt !== primary) plan.push({ model: alt, search: true });
-      plan.push({ model: settings.fallbackModel || DEFAULT_FALLBACK_MODEL, search: false });
-    }
-  } else {
-    plan.push({ model: primary, search: false });
-    if (settings.fallback && settings.fallbackModel && settings.fallbackModel !== primary) {
-      plan.push({ model: settings.fallbackModel, search: false });
-    }
+  function $(id) { return document.getElementById(id); }
+
+  function hideAllViews() {
+    document.querySelectorAll('.view').forEach((v) => { v.hidden = true; });
   }
-  return plan;
-}
 
-async function analyze(photos, note, signal, onStatus) {
-  const apiKey = settings.key;
-  if (!apiKey) throw new GeminiError('请先在设置里填写 Gemini API 密钥。', { fatal: true });
-  const images = await Promise.all(photos.map((p) => blobToBase64(p.blob)));
-  const attempts = [];
-  let lastErr = null;
-  for (const step of planAttempts()) {
-    onStatus(step.search ? `正在用 ${step.model} 识别并联网搜索…` : `正在用 ${step.model} 识别（不联网）…`);
-    try {
-      const data = await callGemini(step.model, buildRequestBody(images, note, step.search), apiKey, signal);
-      const out = extractResponse(data);
-      attempts.push({ model: step.model, search: step.search, ok: true });
-      return { ...out, model: step.model, searchUsed: step.search, attempts };
-    } catch (e) {
-      if (e.name === 'AbortError') throw e;
-      attempts.push({ model: step.model, search: step.search, ok: false, error: explainError(e) });
-      lastErr = e;
-      if (e.fatal) break;
-    }
+  function showTab(tab) {
+    stack = [];
+    currentTab = tab;
+    hideAllViews();
+    document.body.classList.remove('detail-mode');
+    $('btn-back').hidden = true;
+    $('title').textContent = TITLES[tab] || '衣脉';
+    $('btn-add').hidden = !(tab === 'brands' || tab === 'finds');
+    document.querySelectorAll('.nav-item').forEach((b) => {
+      b.classList.toggle('active', b.dataset.tab === tab);
+    });
+    $(`view-${tab}`).hidden = false;
+    if (tab === 'brands') renderBrandsList();
+    if (tab === 'finds') renderFindsList();
+    if (tab === 'search') { /* keep results */ }
+    if (tab === 'me') renderMe();
   }
-  const err = new GeminiError(lastErr ? explainError(lastErr) : '识别失败');
-  err.attempts = attempts;
-  throw err;
-}
 
-/* ---------------- 链接核实 ---------------- */
-const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, '').toLowerCase(); } catch { return ''; } };
-const bareDomain = (s) => String(s || '').toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
-function sameSite(a, b) {
-  if (!a || !b) return false;
-  return a === b || a.endsWith('.' + b) || b.endsWith('.' + a);
-}
-/* 只把搜索来源（groundingChunks）里真实出现过的网页当作链接。来源的 title 通常是域名。 */
-function matchSources(listing, sources) {
-  const want = [hostOf(listing.url), bareDomain(listing.store)].filter(Boolean);
-  const hits = sources.filter((s) => {
-    const d = bareDomain(s.title) || hostOf(s.uri);
-    return want.some((w) => sameSite(w, d));
-  });
-  return hits;
-}
-const searchUrl = {
-  google: (q) => `https://www.google.com/search?q=${encodeURIComponent(q)}`,
-  googleShop: (q) => `https://www.google.com/search?tbm=shop&q=${encodeURIComponent(q)}`,
-  taobao: (q) => `https://s.taobao.com/search?q=${encodeURIComponent(q)}`,
-  ebay: (q) => `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(q)}`,
-  xhs: (q) => `https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(q)}`,
-};
+  function pushView(viewId, title, renderFn) {
+    stack.push({ viewId, title });
+    hideAllViews();
+    document.body.classList.add('detail-mode');
+    $('btn-back').hidden = false;
+    $('btn-add').hidden = true;
+    $('title').textContent = title;
+    $(viewId).hidden = false;
+    if (renderFn) renderFn();
+  }
 
-/* ---------------- 渲染结果 ---------------- */
-function confBadge(c) {
-  const s = String(c || '');
-  if (/高/.test(s)) return '<span class="badge ok">品牌把握：高</span>';
-  if (/中/.test(s)) return '<span class="badge warn">品牌把握：中</span>';
-  if (/低/.test(s)) return '<span class="badge bad">品牌把握：低</span>';
-  return '';
-}
-function kvRow(label, v) { return has(v) ? `<dt>${esc(label)}</dt><dd>${esc(v)}</dd>` : `<dt>${esc(label)}</dt><dd class="hint" style="margin:0">未查到</dd>`; }
-function fmtDate(ts) {
-  const d = new Date(ts);
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-}
-
-function renderResult(rec) {
-  const r = rec.parsed;
-  const out = rec.response;
-  const sources = out.sources || [];
-  const searchName = r ? [r.brand, r.product_name, r.product_model].filter(has).join(' ') : '';
-  const strip = (rec.thumbs || []).map((t) => `<img src="${t}" alt="">`).join('');
-  const modeBadge = out.searchUsed
-    ? (sources.length ? `<span class="badge ok">已联网 · ${sources.length} 个来源</span>` : '<span class="badge warn">已开联网，但没有返回来源</span>')
-    : '<span class="badge bad">未联网 · 仅供参考</span>';
-  let html = '';
-
-  if (!r) {
-    html += `<div class="card"><div class="badges">${modeBadge}<span class="badge">${esc(out.model)}</span></div>
-      <p class="hint">模型没有按格式返回，下面是原始回答：</p><pre class="raw">${esc(out.text)}</pre></div>`;
-  } else {
-    html += `<div class="card">
-      <div class="result-head"><div style="flex:1">
-        <p class="brand">${esc(has(r.brand) ? r.brand : '未能确定品牌')}</p>
-        ${has(r.brand_zh) ? `<div class="sub">${esc(r.brand_zh)}</div>` : ''}
-        <div class="badges">${confBadge(r.brand_confidence)}${modeBadge}<span class="badge">${esc(out.model)}</span></div>
-      </div></div>
-      ${strip ? `<div class="strip">${strip}</div>` : ''}
-      ${has(r.brand_evidence) ? `<p class="hint">识别依据：${esc(r.brand_evidence)}</p>` : ''}
-    </div>`;
-
-    if (!out.searchUsed) {
-      html += `<div class="banner warn">这次没有联网搜索，品牌信息来自模型自身知识，可能过时或有误；没有同款链接。可以在设置里点“测试连接”看看哪个模型能联网。</div>`;
+  function goBack() {
+    stack.pop();
+    if (stack.length === 0) {
+      showTab(currentTab);
+      return;
     }
+    const top = stack[stack.length - 1];
+    hideAllViews();
+    document.body.classList.add('detail-mode');
+    $('btn-back').hidden = false;
+    $('btn-add').hidden = true;
+    $('title').textContent = top.title;
+    $(top.viewId).hidden = false;
+    // re-render based on view
+    if (top.viewId === 'view-brand-detail' && top.brandId) openBrandDetail(top.brandId, true);
+    if (top.viewId === 'view-find-detail' && top.findId) openFindDetail(top.findId, true);
+  }
 
-    html += `<div class="card"><h2>品牌档案</h2><dl class="kv">
-      ${kvRow('国家', r.country)}${kvRow('创立', r.founded)}${kvRow('创始人', r.founder)}${kvRow('现归属', r.owner_now)}
-    </dl>
-    ${has(r.known_for) ? `<h3>主打 / 定位</h3><p class="prose">${esc(r.known_for)}</p>` : ''}
-    ${has(r.history) ? `<h3>品牌历史</h3><p class="prose">${esc(r.history)}</p>` : ''}
-    ${Array.isArray(r.stories) && r.stories.filter(has).length ? `<h3>有趣的故事</h3><ul class="clean">${r.stories.filter(has).map((s) => `<li>${esc(s)}</li>`).join('')}</ul>` : ''}
-    </div>`;
+  // ---------- Seed SOS sample ----------
+  const SOS_SAMPLE = {
+    id: 'sample-sos',
+    name: 'SOS · Sportswear of Sweden',
+    country: '瑞典',
+    foundedYear: '1982',
+    founderOwner: '创始人 Bo Aggerborg；现归属丹麦 Sports Group Denmark（Ole Damm 于 2011 年买入全球品牌权）',
+    positioning: '滑雪 / 单板 / 生活方式，中高端户外',
+    story:
+      'SOS（Sportswear of Sweden）1982 年创立于瑞典滑雪小镇 Åre，主做滑雪服和单板服。\n\n' +
+      '创始人是瑞典广告人 Bo Aggerborg。他在 90 年代把品牌卖掉，后来觉得卖亏了，就起诉了买家，最后打赢官司拿回了 SOS 商标。\n\n' +
+      '2011 年，在丹麦代理 SOS 多年的 Ole Damm 买下了全球品牌权，总部也搬到了丹麦。他说 SOS 从 1985 年起就是他的「心头宝」。\n\n' +
+      '80 年代 SOS 就以大胆、张扬的配色出名，口号是 “Rethink your life in color”。2009 年赞助过瑞典国家雪上技巧队，被滑雪选手称为「一个代表快乐的叛逆滑雪品牌」。',
+    notes:
+      '标识很好认：白色三角大 logo。防风针织衫是代表品类之一：外层羊毛+腈纶，里面有防风内衬，拉链常用 YKK。\n\n（这是示例品牌，可以随时删除。）',
+    priceRef: '防风针织衫（如 Tignes）官网正价大约 ¥1350–1500；欧洲店打折后常见 ¥840–1240。抓绒、羽绒具体看款，市场尾货价格另计。',
+    tags: ['滑雪', '瑞典', '针织', '防风', '户外', 'SOS', '示例'],
+    coverPhotoId: null,
+    isSample: true,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
 
-    html += `<div class="card"><h2>这件衣服</h2><dl class="kv">
-      ${kvRow('款式', r.product_name)}${kvRow('型号', r.product_model)}${kvRow('品类', r.product_category)}${kvRow('成分', r.material)}${kvRow('产地', r.made_in)}
-    </dl>${has(r.product_evidence) ? `<p class="hint">${esc(r.product_evidence)}</p>` : ''}</div>`;
+  async function ensureSeed() {
+    const seeded = await getMeta('seeded');
+    if (seeded) return;
+    const brands = await getAllBrands();
+    if (brands.length === 0) {
+      await putBrand(SOS_SAMPLE);
+    }
+    await setMeta('seeded', true);
+  }
 
-    const listings = Array.isArray(r.listings) ? r.listings.filter((l) => l && (has(l.title) || has(l.store))) : [];
-    html += `<div class="card"><h2>同款 / 相似款</h2>`;
-    if (!listings.length) {
-      html += `<p class="hint">${out.searchUsed ? '这次搜索没找到在售页面。' : '未联网，无法提供链接。'}可以用下面的快捷搜索自己找找。</p>`;
+  // ---------- Brand list / detail / edit ----------
+  let brandsCache = [];
+  let findsCache = [];
+
+  async function refreshCaches() {
+    brandsCache = await getAllBrands();
+    brandsCache.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    findsCache = await getAllFinds();
+    findsCache.sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || 0) - (a.createdAt || 0));
+  }
+
+  function brandMatches(b, q) {
+    if (!q) return true;
+    const hay = [
+      b.name, b.country, b.foundedYear, b.founderOwner, b.positioning,
+      b.story, b.notes, b.priceRef, ...(b.tags || []),
+    ].join(' ').toLowerCase();
+    return q.split(/\s+/).every((w) => hay.includes(w));
+  }
+
+  async function renderBrandsList() {
+    await refreshCaches();
+    const q = ($('brands-filter').value || '').trim().toLowerCase();
+    const list = brandsCache.filter((b) => brandMatches(b, q));
+    const el = $('brands-list');
+    const empty = $('brands-empty');
+    if (list.length === 0) {
+      el.innerHTML = '';
+      empty.hidden = brandsCache.length > 0 && !!q ? false : brandsCache.length === 0;
+      if (brandsCache.length > 0 && q) {
+        empty.hidden = false;
+        empty.innerHTML = `<div class="empty-icon">🔍</div><p>没有匹配「${esc(q)}」的品牌</p>`;
+      } else if (brandsCache.length === 0) {
+        empty.hidden = false;
+        empty.innerHTML = `<div class="empty-icon">🏷</div><p>还没有品牌</p><button class="btn primary" data-action="new-brand">添加第一个品牌</button>`;
+      }
+      return;
+    }
+    empty.hidden = true;
+    const parts = [];
+    for (const b of list) {
+      const cover = await photoURL(b.coverPhotoId);
+      const sub = [b.country, b.foundedYear ? b.foundedYear + ' 年' : ''].filter(Boolean).join(' · ');
+      const tags = (b.tags || []).slice(0, 4).map((t) =>
+        `<span class="tag${t === '示例' || b.isSample && t === '示例' ? ' sample-tag' : ''}">${esc(t)}</span>`
+      ).join('');
+      parts.push(`
+        <button type="button" class="list-item" data-open-brand="${esc(b.id)}">
+          <div class="list-thumb">${cover ? `<img src="${cover}" alt="">` : '🏷'}</div>
+          <div class="list-body">
+            <div class="list-title">${esc(b.name)}</div>
+            <p class="list-sub">${esc(sub || b.positioning || '—')}${b.isSample ? ' · 示例可删' : ''}</p>
+            ${tags ? `<div class="tags">${tags}${b.isSample ? '<span class="tag sample-tag">示例</span>' : ''}</div>` : (b.isSample ? '<div class="tags"><span class="tag sample-tag">示例</span></div>' : '')}
+          </div>
+        </button>`);
+    }
+    el.innerHTML = parts.join('');
+  }
+
+  async function openBrandDetail(id, replaceTop) {
+    const b = await getBrand(id);
+    if (!b) { toast('品牌不存在'); return; }
+    if (!replaceTop) {
+      stack.push({ viewId: 'view-brand-detail', title: b.name, brandId: id });
+    } else if (stack.length) {
+      stack[stack.length - 1].brandId = id;
+      stack[stack.length - 1].title = b.name;
+    }
+    hideAllViews();
+    document.body.classList.add('detail-mode');
+    $('btn-back').hidden = false;
+    $('btn-add').hidden = true;
+    $('title').textContent = b.name;
+    $('view-brand-detail').hidden = false;
+
+    const cover = await photoURL(b.coverPhotoId);
+    const related = findsCache.filter((f) => f.brandId === id);
+    // also refresh finds
+    if (!findsCache.length) await refreshCaches();
+    const finds = (await getAllFinds()).filter((f) => f.brandId === id)
+      .sort((a, b2) => (b2.date || '').localeCompare(a.date || ''));
+
+    let findsHtml = '';
+    if (finds.length) {
+      const items = [];
+      for (const f of finds) {
+        const thumbId = (f.photoIds || [])[0];
+        const thumb = await photoURL(thumbId);
+        items.push(`
+          <button type="button" class="list-item" data-open-find="${esc(f.id)}">
+            <div class="list-thumb">${thumb ? `<img src="${thumb}" alt="">` : '🧥'}</div>
+            <div class="list-body">
+              <div class="list-title">${esc(f.date || '未注日期')}</div>
+              <p class="list-sub">${esc((f.notes || '').slice(0, 60) || `${(f.photoIds || []).length} 张照片`)}</p>
+            </div>
+          </button>`);
+      }
+      findsHtml = `<div class="section-label">关联淘货 · ${finds.length}</div><div class="list">${items.join('')}</div>`;
     } else {
-      for (const l of listings) {
-        const hits = out.searchUsed ? matchSources(l, sources) : [];
-        const price = [has(l.price) ? `${l.currency || ''} ${l.price}`.trim() : '', has(l.price_cny) ? `≈ ¥${String(l.price_cny).replace(/^[¥￥\s]+/, '')}` : ''].filter(Boolean).join('　');
-        const q = [l.title, l.store].filter(has).join(' ');
-        html += `<div class="listing">
-          <div class="t">${esc(l.title || l.store)}</div>
-          <div class="meta">${esc([l.store, l.match, l.note].filter(has).join(' · '))}</div>
-          ${price ? `<div class="p">${esc(price)}</div>` : ''}
-          <div class="meta">${hits.length
-            ? hits.slice(0, 2).map((h, i) => `<a href="${esc(h.uri)}" target="_blank" rel="noopener noreferrer">打开来源页${hits.length > 1 ? i + 1 : ''}（${esc(h.title || hostOf(h.uri))}）</a>`).join('　')
-            : `未在本次搜索来源中核实 · <a href="${esc(searchUrl.google(q))}" target="_blank" rel="noopener noreferrer">Google 搜这个</a>`}</div>
-        </div>`;
+      findsHtml = `<div class="section-label">关联淘货</div><p class="hint">还没有挂到这个品牌的衣服。<button class="link-btn" data-new-find-for="${esc(id)}">去添加</button></p>`;
+    }
+
+    const tags = (b.tags || []).map((t) => `<span class="tag">${esc(t)}</span>`).join('');
+
+    $('brand-detail').innerHTML = `
+      ${b.isSample ? '<div class="banner sample">这是示例品牌，可以随时编辑或删除。</div>' : ''}
+      <div class="card">
+        <div class="detail-hero">
+          <div class="detail-cover">${cover ? `<img src="${cover}" alt="">` : '🏷'}</div>
+          <div>
+            <h2 class="detail-name">${esc(b.name)}</h2>
+            <p class="detail-sub">${esc([b.country, b.foundedYear ? b.foundedYear + ' 年创立' : ''].filter(Boolean).join(' · ') || '—')}</p>
+            ${tags ? `<div class="tags">${tags}</div>` : ''}
+          </div>
+        </div>
+        <div class="detail-actions">
+          <button class="btn small" data-edit-brand="${esc(id)}">编辑</button>
+          <button class="btn small" data-new-find-for="${esc(id)}">＋ 淘货</button>
+          <button class="btn small" data-copy-brand="${esc(id)}">复制文案</button>
+        </div>
+      </div>
+      ${b.positioning ? `<div class="card detail-section"><h3>主打定位</h3><div class="body">${esc(b.positioning)}</div></div>` : ''}
+      ${b.founderOwner ? `<div class="card detail-section"><h3>创始人 / 所有者</h3><div class="body">${esc(b.founderOwner)}</div></div>` : ''}
+      ${b.story ? `<div class="card detail-section"><h3>品牌故事</h3><div class="body">${esc(b.story)}</div></div>` : ''}
+      ${b.notes ? `<div class="card detail-section"><h3>有趣的事</h3><div class="body">${esc(b.notes)}</div></div>` : ''}
+      ${b.priceRef ? `<div class="card detail-section"><h3>价位参考</h3><div class="body">${esc(b.priceRef)}</div></div>` : ''}
+      ${findsHtml}
+    `;
+  }
+
+  let pendingCoverBlob = null; // for brand edit
+  let pendingCoverPreviewURL = null;
+  let editingBrandCoverId = null; // existing photo id to keep
+
+  function clearCoverPending() {
+    pendingCoverBlob = null;
+    if (pendingCoverPreviewURL) {
+      URL.revokeObjectURL(pendingCoverPreviewURL);
+      pendingCoverPreviewURL = null;
+    }
+  }
+
+  async function openBrandEdit(id) {
+    clearCoverPending();
+    editingBrandCoverId = null;
+    const isNew = !id;
+    const b = isNew ? null : await getBrand(id);
+    if (!isNew && !b) { toast('品牌不存在'); return; }
+
+    stack.push({ viewId: 'view-brand-edit', title: isNew ? '新品牌' : '编辑品牌', brandId: id });
+    hideAllViews();
+    document.body.classList.add('detail-mode');
+    $('btn-back').hidden = false;
+    $('btn-add').hidden = true;
+    $('title').textContent = isNew ? '新品牌' : '编辑品牌';
+    $('view-brand-edit').hidden = false;
+
+    $('bf-title').textContent = isNew ? '新品牌' : '编辑品牌';
+    $('bf-id').value = id || '';
+    $('bf-name').value = b ? b.name : '';
+    $('bf-country').value = b ? (b.country || '') : '';
+    $('bf-year').value = b ? (b.foundedYear || '') : '';
+    $('bf-founder').value = b ? (b.founderOwner || '') : '';
+    $('bf-positioning').value = b ? (b.positioning || '') : '';
+    $('bf-tags').value = b ? tagsToStr(b.tags) : '';
+    $('bf-story').value = b ? (b.story || '') : '';
+    $('bf-notes').value = b ? (b.notes || '') : '';
+    $('bf-price').value = b ? (b.priceRef || '') : '';
+    $('bf-delete').hidden = isNew;
+
+    editingBrandCoverId = b ? b.coverPhotoId : null;
+    await renderCoverPreview();
+  }
+
+  async function renderCoverPreview() {
+    const grid = $('bf-cover-preview');
+    let url = null;
+    if (pendingCoverPreviewURL) url = pendingCoverPreviewURL;
+    else if (editingBrandCoverId) url = await photoURL(editingBrandCoverId);
+    if (!url) {
+      grid.innerHTML = '';
+      return;
+    }
+    grid.innerHTML = `<div class="thumb"><img src="${url}" alt=""><button type="button" aria-label="删除" data-remove-cover>×</button></div>`;
+  }
+
+  async function saveBrand(ev) {
+    ev.preventDefault();
+    const id = $('bf-id').value || uid();
+    const existing = $('bf-id').value ? await getBrand(id) : null;
+    let coverPhotoId = editingBrandCoverId;
+
+    if (pendingCoverBlob) {
+      // replace cover
+      if (existing && existing.coverPhotoId && existing.coverPhotoId !== coverPhotoId) {
+        // already handled
+      }
+      if (existing && existing.coverPhotoId) {
+        await deletePhoto(existing.coverPhotoId);
+      }
+      coverPhotoId = uid();
+      await putPhoto(coverPhotoId, pendingCoverBlob);
+    } else if (!editingBrandCoverId && existing && existing.coverPhotoId) {
+      // user removed cover
+      await deletePhoto(existing.coverPhotoId);
+      coverPhotoId = null;
+    }
+
+    const brand = {
+      id,
+      name: $('bf-name').value.trim(),
+      country: $('bf-country').value.trim(),
+      foundedYear: $('bf-year').value.trim(),
+      founderOwner: $('bf-founder').value.trim(),
+      positioning: $('bf-positioning').value.trim(),
+      story: $('bf-story').value.trim(),
+      notes: $('bf-notes').value.trim(),
+      priceRef: $('bf-price').value.trim(),
+      tags: parseTags($('bf-tags').value),
+      coverPhotoId: coverPhotoId || null,
+      isSample: existing ? !!existing.isSample : false,
+      createdAt: existing ? existing.createdAt : Date.now(),
+      updatedAt: Date.now(),
+    };
+    if (!brand.name) { toast('请填写品牌名'); return; }
+    await putBrand(brand);
+    clearCoverPending();
+    toast('已保存');
+    // go to detail
+    stack = stack.filter((s) => s.viewId !== 'view-brand-edit');
+    // if came from detail of same brand, pop that too and reopen
+    stack = stack.filter((s) => !(s.viewId === 'view-brand-detail' && s.brandId === id));
+    await refreshCaches();
+    await openBrandDetail(id);
+  }
+
+  async function copyBrandText(id) {
+    const b = await getBrand(id);
+    if (!b) return;
+    const lines = [
+      b.name,
+      [b.country, b.foundedYear ? b.foundedYear + ' 年创立' : ''].filter(Boolean).join(' · '),
+      b.positioning ? `定位：${b.positioning}` : '',
+      b.founderOwner ? `创始人/所有者：${b.founderOwner}` : '',
+      '',
+      b.story || '',
+      '',
+      b.notes ? `备注：\n${b.notes}` : '',
+      '',
+      b.priceRef ? `价位参考：\n${b.priceRef}` : '',
+    ].filter((l, i, arr) => !(l === '' && (arr[i - 1] === '' || i === 0)));
+    const text = lines.join('\n').trim();
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('已复制到剪贴板');
+    } catch {
+      toast('复制失败，请长按选择文字');
+    }
+  }
+
+  // ---------- Finds ----------
+  let pendingFindPhotos = []; // { id?, blob?, previewURL, existingId? }
+  // When editing: existing photos kept as { existingId, previewURL }
+  // New photos: { blob, previewURL }
+
+  function clearFindPhotosPending() {
+    for (const p of pendingFindPhotos) {
+      if (p.previewURL && !p.existingId) URL.revokeObjectURL(p.previewURL);
+    }
+    pendingFindPhotos = [];
+  }
+
+  function findMatches(f, q, brandMap) {
+    if (!q) return true;
+    const brand = f.brandId ? brandMap.get(f.brandId) : null;
+    const hay = [
+      f.notes, f.date,
+      brand ? brand.name : '',
+      brand ? brand.country : '',
+      brand ? (brand.tags || []).join(' ') : '',
+    ].join(' ').toLowerCase();
+    return q.split(/\s+/).every((w) => hay.includes(w));
+  }
+
+  async function renderFindsList() {
+    await refreshCaches();
+    const brandMap = new Map(brandsCache.map((b) => [b.id, b]));
+    const q = ($('finds-filter').value || '').trim().toLowerCase();
+    const list = findsCache.filter((f) => findMatches(f, q, brandMap));
+    const el = $('finds-list');
+    const empty = $('finds-empty');
+    if (list.length === 0) {
+      el.innerHTML = '';
+      if (findsCache.length === 0) {
+        empty.hidden = false;
+        empty.innerHTML = `<div class="empty-icon">🧥</div><p>还没有淘到的衣服</p><button class="btn primary" data-action="new-find">记录第一件</button>`;
+      } else {
+        empty.hidden = false;
+        empty.innerHTML = `<div class="empty-icon">🔍</div><p>没有匹配的淘货</p>`;
+      }
+      return;
+    }
+    empty.hidden = true;
+    const parts = [];
+    for (const f of list) {
+      const thumbId = (f.photoIds || [])[0];
+      const thumb = await photoURL(thumbId);
+      const brand = f.brandId ? brandMap.get(f.brandId) : null;
+      parts.push(`
+        <button type="button" class="list-item" data-open-find="${esc(f.id)}">
+          <div class="list-thumb">${thumb ? `<img src="${thumb}" alt="">` : '🧥'}</div>
+          <div class="list-body">
+            <div class="list-title">${esc(brand ? brand.name : '未关联品牌')}</div>
+            <p class="list-sub">${esc(f.date || '未注日期')}${(f.notes ? ' · ' + f.notes.slice(0, 40) : '')}</p>
+            <p class="list-meta">${(f.photoIds || []).length} 张照片</p>
+          </div>
+        </button>`);
+    }
+    el.innerHTML = parts.join('');
+  }
+
+  async function openFindDetail(id, replaceTop) {
+    const f = await getFind(id);
+    if (!f) { toast('记录不存在'); return; }
+    const brand = f.brandId ? await getBrand(f.brandId) : null;
+    const title = brand ? brand.name : '淘货';
+    if (!replaceTop) {
+      stack.push({ viewId: 'view-find-detail', title, findId: id });
+    } else if (stack.length) {
+      stack[stack.length - 1].findId = id;
+      stack[stack.length - 1].title = title;
+    }
+    hideAllViews();
+    document.body.classList.add('detail-mode');
+    $('btn-back').hidden = false;
+    $('btn-add').hidden = true;
+    $('title').textContent = title;
+    $('view-find-detail').hidden = false;
+
+    const photos = [];
+    for (const pid of f.photoIds || []) {
+      const url = await photoURL(pid);
+      if (url) photos.push({ id: pid, url });
+    }
+
+    $('find-detail').innerHTML = `
+      <div class="card">
+        <h2 class="detail-name">${esc(brand ? brand.name : '未关联品牌')}</h2>
+        <p class="detail-sub">${esc(f.date || '未注日期')}</p>
+        <div class="detail-actions">
+          <button class="btn small" data-edit-find="${esc(id)}">编辑</button>
+          ${brand ? `<button class="btn small" data-open-brand="${esc(brand.id)}">查看品牌</button>` : ''}
+        </div>
+      </div>
+      ${photos.length ? `
+        <div class="card">
+          <h3>照片 · ${photos.length}</h3>
+          <div class="photo-strip">
+            ${photos.map((p) => `<div class="thumb" data-lightbox="${p.url}"><img src="${p.url}" alt=""></div>`).join('')}
+          </div>
+        </div>` : ''}
+      ${f.notes ? `<div class="card detail-section"><h3>备注</h3><div class="body">${esc(f.notes)}</div></div>` : ''}
+    `;
+  }
+
+  async function fillBrandSelect(selectedId) {
+    await refreshCaches();
+    const sel = $('ff-brand');
+    sel.innerHTML = '<option value="">— 暂不关联 —</option>' +
+      brandsCache.map((b) =>
+        `<option value="${esc(b.id)}"${b.id === selectedId ? ' selected' : ''}>${esc(b.name)}</option>`
+      ).join('');
+  }
+
+  async function openFindEdit(id, presetBrandId) {
+    clearFindPhotosPending();
+    const isNew = !id;
+    const f = isNew ? null : await getFind(id);
+    if (!isNew && !f) { toast('记录不存在'); return; }
+
+    stack.push({ viewId: 'view-find-edit', title: isNew ? '新淘货' : '编辑淘货', findId: id });
+    hideAllViews();
+    document.body.classList.add('detail-mode');
+    $('btn-back').hidden = false;
+    $('btn-add').hidden = true;
+    $('title').textContent = isNew ? '新淘货' : '编辑淘货';
+    $('view-find-edit').hidden = false;
+
+    $('ff-title').textContent = isNew ? '新淘货' : '编辑淘货';
+    $('ff-id').value = id || '';
+    $('ff-date').value = f ? (f.date || todayISO()) : todayISO();
+    $('ff-notes').value = f ? (f.notes || '') : '';
+    $('ff-delete').hidden = isNew;
+    await fillBrandSelect(f ? f.brandId : presetBrandId);
+
+    if (f && f.photoIds) {
+      for (const pid of f.photoIds) {
+        const url = await photoURL(pid);
+        pendingFindPhotos.push({ existingId: pid, previewURL: url });
       }
     }
-    html += `<h3>价格</h3><dl class="kv">${kvRow('正价', r.price_retail_cny)}${kvRow('二手/折扣', r.price_secondhand_cny)}</dl>
-      ${has(r.price_note) ? `<p class="hint">${esc(r.price_note)}</p>` : ''}</div>`;
+    renderFindPhotosPreview();
+  }
 
-    if (Array.isArray(r.uncertainties) && r.uncertainties.filter(has).length) {
-      html += `<div class="card"><h2>⚠️ 需要核对</h2><ul class="clean">${r.uncertainties.filter(has).map((s) => `<li>${esc(s)}</li>`).join('')}</ul></div>`;
+  function renderFindPhotosPreview() {
+    const grid = $('ff-photos');
+    if (!pendingFindPhotos.length) {
+      grid.innerHTML = '';
+      return;
     }
+    grid.innerHTML = pendingFindPhotos.map((p, i) =>
+      `<div class="thumb"><img src="${p.previewURL}" alt=""><button type="button" aria-label="删除" data-remove-find-photo="${i}">×</button></div>`
+    ).join('');
   }
 
-  const kws = (r && Array.isArray(r.search_keywords) ? r.search_keywords.filter(has) : []);
-  const q0 = searchName || kws[0] || '';
-  if (q0) {
-    const qEn = kws.find((k) => /[a-z]/i.test(k)) || q0;
-    const qZh = kws.find((k) => /[\u4e00-\u9fff]/.test(k)) || q0;
-    html += `<div class="card"><h2>快捷搜索</h2><p class="hint">这些是搜索入口，不是商品链接。</p><div class="chips">
-      <a href="${esc(searchUrl.googleShop(qEn))}" target="_blank" rel="noopener noreferrer">Google 购物</a>
-      <a href="${esc(searchUrl.ebay(qEn))}" target="_blank" rel="noopener noreferrer">eBay</a>
-      <a href="${esc(searchUrl.taobao(qZh))}" target="_blank" rel="noopener noreferrer">淘宝</a>
-      <a href="${esc(searchUrl.xhs(qZh))}" target="_blank" rel="noopener noreferrer">小红书</a>
-      <a href="${esc(searchUrl.google(q0 + ' brand history'))}" target="_blank" rel="noopener noreferrer">Google 品牌</a>
-    </div>${kws.length ? `<p class="hint">关键词：${esc(kws.join(' / '))}</p>` : ''}</div>`;
-  }
-
-  if (sources.length || out.searchWidget) {
-    html += `<div class="card sources"><h2>参考来源</h2>
-      <p class="hint">来自 Google 搜索的原始页面（经 Google 跳转）。较早的记录里，跳转链接可能已经失效。</p>
-      <ol class="clean">${sources.map((s) => `<li><a href="${esc(s.uri)}" target="_blank" rel="noopener noreferrer">${esc(s.title || hostOf(s.uri) || s.uri)}</a></li>`).join('')}</ol>
-      ${out.searchWidget ? '<iframe class="search-widget" id="search-widget" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" title="Google 搜索建议"></iframe>' : ''}
-    </div>`;
-  }
-
-  html += `<div class="actions">
-    <button class="btn primary" id="btn-copy">复制全文</button>
-    <button class="btn" id="btn-rerun">重新识别</button>
-    <button class="btn danger" id="btn-delete">删除记录</button>
-  </div>
-  <details class="card"><summary>技术信息</summary>
-    <p class="hint">时间：${esc(fmtDate(rec.createdAt))}　模型：${esc(out.modelVersion || out.model)}</p>
-    ${out.queries && out.queries.length ? `<p class="hint">搜索词：${esc(out.queries.join(' | '))}</p>` : ''}
-    ${(out.attempts || []).map((a) => `<p class="hint">${a.ok ? '✅' : '❌'} ${esc(a.model)}${a.search ? '（联网）' : '（不联网）'}${a.error ? '：' + esc(a.error) : ''}</p>`).join('')}
-    <pre class="raw">${esc(out.text)}</pre>
-  </details>`;
-
-  const el = $('#result');
-  el.innerHTML = html;
-  const iframe = $('#search-widget');
-  if (iframe) {
-    iframe.srcdoc = `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><base target="_blank"><style>body{margin:0}</style></head><body>${out.searchWidget}</body></html>`;
-    iframe.onload = () => { try { iframe.style.height = (iframe.contentDocument.body.scrollHeight + 8) + 'px'; } catch { /* cross-origin */ } };
-  }
-  $('#btn-copy').onclick = () => copyText(resultToText(rec));
-  $('#btn-delete').onclick = async () => {
-    if (!confirm('删除这条记录？')) return;
-    await db.del(rec.id);
-    toast('已删除');
-    show('history');
-  };
-  $('#btn-rerun').onclick = async () => {
-    state.photos = (rec.photos || []).map((p, i) => ({ id: `${rec.id}-${i}`, blob: p, thumb: rec.thumbs[i] }));
-    $('#note').value = rec.note || '';
-    renderPhotos();
-    show('home');
-  };
-}
-
-function resultToText(rec) {
-  const r = rec.parsed, out = rec.response;
-  if (!r) return out.text;
-  const L = [];
-  const line = (k, v) => { if (has(v)) L.push(`${k}：${v}`); };
-  L.push(`【${r.brand || '未知品牌'}】${has(r.brand_zh) ? ' ' + r.brand_zh : ''}`);
-  line('国家', r.country); line('创立', r.founded); line('创始人', r.founder); line('现归属', r.owner_now);
-  if (has(r.known_for)) L.push(`\n主打/定位：${r.known_for}`);
-  if (has(r.history)) L.push(`\n品牌历史：\n${r.history}`);
-  const st = (r.stories || []).filter(has);
-  if (st.length) L.push('\n有趣的故事：\n' + st.map((s, i) => `${i + 1}. ${s}`).join('\n'));
-  L.push('\n这件衣服：');
-  line('款式', r.product_name); line('型号', r.product_model); line('品类', r.product_category); line('成分', r.material); line('产地', r.made_in);
-  const ls = (r.listings || []).filter((l) => l && has(l.title));
-  if (ls.length) {
-    L.push('\n同款/相似款：');
-    for (const l of ls) {
-      const hits = out.searchUsed ? matchSources(l, out.sources || []) : [];
-      L.push(`- ${l.title}（${l.store || ''}）${has(l.price) ? ` ${l.currency || ''} ${l.price}` : ''}${has(l.price_cny) ? ` ≈ ¥${String(l.price_cny).replace(/^[¥￥\s]+/, '')}` : ''}${hits[0] ? `\n  ${hits[0].uri}` : ''}`);
+  async function addFindPhotos(fileList) {
+    const files = Array.from(fileList || []);
+    for (const file of files) {
+      if (pendingFindPhotos.length >= MAX_FIND_PHOTOS) {
+        toast(`最多 ${MAX_FIND_PHOTOS} 张`);
+        break;
+      }
+      try {
+        const blob = await compressImage(file);
+        const previewURL = URL.createObjectURL(blob);
+        pendingFindPhotos.push({ blob, previewURL });
+      } catch (e) {
+        toast('有一张图片处理失败');
+      }
     }
+    renderFindPhotosPreview();
   }
-  L.push('');
-  line('正价', r.price_retail_cny); line('二手/折扣', r.price_secondhand_cny); line('价格说明', r.price_note);
-  const un = (r.uncertainties || []).filter(has);
-  if (un.length) L.push('\n需要核对：\n' + un.map((s) => `- ${s}`).join('\n'));
-  if (!out.searchUsed) L.push('\n（本次未联网，信息仅供参考）');
-  return L.join('\n');
-}
 
-async function copyText(t) {
-  try {
-    await navigator.clipboard.writeText(t);
-  } catch {
-    const ta = document.createElement('textarea');
-    ta.value = t; ta.setAttribute('readonly', '');
-    ta.style.position = 'fixed'; ta.style.opacity = '0';
-    document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, t.length);
-    try { document.execCommand('copy'); } catch { /* ignore */ }
-    ta.remove();
-  }
-  toast('已复制');
-}
+  async function saveFind(ev) {
+    ev.preventDefault();
+    const id = $('ff-id').value || uid();
+    const existing = $('ff-id').value ? await getFind(id) : null;
+    const oldIds = new Set(existing ? (existing.photoIds || []) : []);
+    const keepIds = new Set();
+    const newPhotoIds = [];
 
-/* ---------------- 页面状态 ---------------- */
-const state = { photos: [], view: 'home', abort: null, timer: null };
-
-function toast(msg, ms = 1800) {
-  const t = $('#toast');
-  t.textContent = msg; t.hidden = false;
-  clearTimeout(toast._t);
-  toast._t = setTimeout(() => { t.hidden = true; }, ms);
-}
-
-const TITLES = { home: '尾货寻牌', result: '识别结果', history: '历史记录', settings: '设置' };
-function show(view) {
-  state.view = view;
-  for (const v of ['home', 'result', 'history', 'settings']) $(`#view-${v}`).hidden = v !== view;
-  $('#title').textContent = TITLES[view];
-  $('#btn-back').hidden = view === 'home';
-  if (view === 'home') refreshHome();
-  if (view === 'history') renderHistory();
-  if (view === 'settings') loadSettingsForm();
-  window.scrollTo(0, 0);
-}
-
-function refreshHome() {
-  $('#key-banner').hidden = !!settings.key;
-  const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
-  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
-  $('#install-tip').hidden = standalone || !isIOS || localStorage.getItem(LS.installDismissed) === '1';
-  $('#btn-analyze').disabled = !state.photos.length || !!state.abort;
-}
-
-function renderPhotos() {
-  const grid = $('#photo-grid');
-  grid.innerHTML = state.photos.map((p) => `<div class="thumb"><img src="${p.thumb}" alt=""><button data-del="${esc(p.id)}" aria-label="删除">×</button></div>`).join('');
-  refreshHome();
-}
-
-async function addFiles(fileList) {
-  const files = Array.from(fileList || []).filter((f) => f.type.startsWith('image/') || /\.(heic|heif|jpe?g|png|webp)$/i.test(f.name));
-  if (!files.length) return;
-  const room = MAX_PHOTOS - state.photos.length;
-  if (room <= 0) { toast(`最多 ${MAX_PHOTOS} 张`); return; }
-  if (files.length > room) toast(`最多 ${MAX_PHOTOS} 张，只加了前 ${room} 张`);
-  for (const f of files.slice(0, room)) {
-    try {
-      state.photos.push(await processPhoto(f));
-      renderPhotos();
-    } catch (e) {
-      console.warn(e);
-      toast('有一张图片读取失败');
+    for (const p of pendingFindPhotos) {
+      if (p.existingId) {
+        keepIds.add(p.existingId);
+        newPhotoIds.push(p.existingId);
+      } else if (p.blob) {
+        const pid = uid();
+        await putPhoto(pid, p.blob);
+        newPhotoIds.push(pid);
+      }
     }
-  }
-}
+    // delete removed old photos
+    for (const oid of oldIds) {
+      if (!keepIds.has(oid)) await deletePhoto(oid);
+    }
 
-async function runAnalyze() {
-  if (!settings.key) { show('settings'); toast('先填写 API 密钥'); return; }
-  if (!state.photos.length) return;
-  $('#home-error').hidden = true;
-  const ctrl = new AbortController();
-  state.abort = ctrl;
-  const timeout = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
-  const started = Date.now();
-  $('#loading').hidden = false;
-  refreshHome();
-  state.timer = setInterval(() => { $('#loading-timer').textContent = Math.round((Date.now() - started) / 1000); }, 500);
-  try {
-    const note = $('#note').value;
-    const response = await analyze(state.photos, note, ctrl.signal, (s) => { $('#loading-text').textContent = s; });
-    const rec = {
-      id: `${Date.now()}`,
-      createdAt: Date.now(),
-      note,
-      thumbs: state.photos.map((p) => p.thumb),
-      photos: state.photos.map((p) => p.blob),
-      response,
-      parsed: parseJSONLoose(response.text),
+    const find = {
+      id,
+      brandId: $('ff-brand').value || null,
+      date: $('ff-date').value || todayISO(),
+      notes: $('ff-notes').value.trim(),
+      photoIds: newPhotoIds,
+      createdAt: existing ? existing.createdAt : Date.now(),
+      updatedAt: Date.now(),
     };
-    rec.title = rec.parsed && has(rec.parsed.brand) ? rec.parsed.brand : '未识别';
-    try { await db.put(rec); } catch (e) { console.warn('保存历史失败', e); }
-    state.photos = [];
-    $('#note').value = '';
-    renderPhotos();
-    renderResult(rec);
-    show('result');
-  } catch (e) {
-    const el = $('#home-error');
-    if (e.name === 'AbortError') {
-      el.textContent = Date.now() - started >= REQUEST_TIMEOUT_MS - 500 ? '等太久了，已停止。请检查网络后重试。' : '已取消。';
-    } else {
-      const tries = (e.attempts || []).filter((a) => !a.ok).map((a) => `· ${a.model}${a.search ? '（联网）' : '（不联网）'}：${a.error}`).join('\n');
-      el.textContent = `识别失败：${e.message}${tries && e.attempts.length > 1 ? `\n\n尝试过：\n${tries}` : ''}`;
-    }
-    el.hidden = false;
-  } finally {
-    clearTimeout(timeout);
-    clearInterval(state.timer);
-    state.abort = null;
-    $('#loading').hidden = true;
-    refreshHome();
+    await putFind(find);
+    clearFindPhotosPending();
+    toast('已保存');
+    stack = stack.filter((s) => s.viewId !== 'view-find-edit');
+    stack = stack.filter((s) => !(s.viewId === 'view-find-detail' && s.findId === id));
+    await refreshCaches();
+    await openFindDetail(id);
   }
-}
 
-async function renderHistory() {
-  const box = $('#history-list');
-  let items = [];
-  try { items = await db.all(); } catch (e) { box.innerHTML = `<div class="banner error">读取历史失败：${esc(e.message)}</div>`; return; }
-  if (!items.length) { box.innerHTML = '<div class="empty">还没有记录。识别过的衣服会保存在这里。</div>'; return; }
-  box.innerHTML = items.map((r) => {
-    const p = r.parsed || {};
-    const sub = [p.product_name, p.country].filter(has).join(' · ');
-    return `<div class="h-item" data-id="${esc(r.id)}">
-      <img src="${(r.thumbs && r.thumbs[0]) || ''}" alt="">
-      <div style="flex:1;min-width:0">
-        <div class="t">${esc(r.title || '未识别')}</div>
-        ${sub ? `<div class="meta">${esc(sub)}</div>` : ''}
-        <div class="meta">${esc(fmtDate(r.createdAt))}${r.response && !r.response.searchUsed ? ' · 未联网' : ''}</div>
-      </div></div>`;
-  }).join('');
-}
+  // ---------- Search ----------
+  async function runSearch() {
+    const q = ($('global-search').value || '').trim().toLowerCase();
+    const results = $('search-results');
+    const empty = $('search-empty');
+    if (!q) {
+      results.innerHTML = '';
+      empty.hidden = false;
+      empty.innerHTML = `<div class="empty-icon">🔍</div><p>输入关键词，搜索你的品牌库和淘货记录</p>`;
+      return;
+    }
+    await refreshCaches();
+    const brandMap = new Map(brandsCache.map((b) => [b.id, b]));
+    const brands = brandsCache.filter((b) => brandMatches(b, q));
+    const finds = findsCache.filter((f) => findMatches(f, q, brandMap));
 
-/* ---------------- 设置页 ---------------- */
-function loadSettingsForm() {
-  $('#api-key').value = settings.key;
-  $('#key-status').textContent = settings.key ? `已保存（…${settings.key.slice(-4)}）` : '未保存';
-  const m = settings.model;
-  const isPreset = PRESET_MODELS.includes(m);
-  $('#model').value = isPreset ? m : 'custom';
-  $('#model-custom').hidden = isPreset;
-  $('#model-custom').value = isPreset ? '' : m;
-  $('#opt-search').checked = settings.search;
-  $('#opt-fallback').checked = settings.fallback;
-  $('#fallback-model').value = settings.fallbackModel;
-  db.count().then((n) => { $('#history-count').textContent = `共 ${n} 条记录，保存在这台手机上。`; }).catch(() => {});
-  $('#app-version').textContent = APP_VERSION;
-}
+    if (!brands.length && !finds.length) {
+      results.innerHTML = '';
+      empty.hidden = false;
+      empty.innerHTML = `<div class="empty-icon">🔍</div><p>没有找到「${esc(q)}」</p>`;
+      return;
+    }
+    empty.hidden = true;
+    const parts = [];
+    if (brands.length) {
+      parts.push(`<div class="section-label">品牌 · ${brands.length}</div>`);
+      for (const b of brands) {
+        const cover = await photoURL(b.coverPhotoId);
+        parts.push(`
+          <button type="button" class="list-item" data-open-brand="${esc(b.id)}">
+            <div class="list-thumb">${cover ? `<img src="${cover}" alt="">` : '🏷'}</div>
+            <div class="list-body">
+              <div class="list-title">${esc(b.name)}</div>
+              <p class="list-sub">${esc([b.country, b.positioning].filter(Boolean).join(' · ') || '—')}</p>
+            </div>
+          </button>`);
+      }
+    }
+    if (finds.length) {
+      parts.push(`<div class="section-label">淘货 · ${finds.length}</div>`);
+      for (const f of finds) {
+        const thumb = await photoURL((f.photoIds || [])[0]);
+        const brand = f.brandId ? brandMap.get(f.brandId) : null;
+        parts.push(`
+          <button type="button" class="list-item" data-open-find="${esc(f.id)}">
+            <div class="list-thumb">${thumb ? `<img src="${thumb}" alt="">` : '🧥'}</div>
+            <div class="list-body">
+              <div class="list-title">${esc(brand ? brand.name : '未关联品牌')}</div>
+              <p class="list-sub">${esc(f.date || '')}${(f.notes ? ' · ' + f.notes.slice(0, 40) : '')}</p>
+            </div>
+          </button>`);
+      }
+    }
+    results.innerHTML = parts.join('');
+  }
 
-async function runTest() {
-  const key = settings.key;
-  const box = $('#test-result');
-  if (!key) { box.innerHTML = '<p class="hint">先保存密钥。</p>'; return; }
-  const models = Array.from(new Set([settings.model, 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.8-flash']));
-  const tests = models.map((m) => ({ model: m, search: true }));
-  tests.push({ model: settings.fallbackModel || DEFAULT_FALLBACK_MODEL, search: false });
-  box.innerHTML = tests.map((t, i) => `<div class="test-row"><span>${esc(t.model)}${t.search ? '（联网）' : '（不联网）'}</span><span id="t-${i}">测试中…</span></div>`).join('');
-  $('#btn-test').disabled = true;
-  await Promise.all(tests.map(async (t, i) => {
-    const body = {
-      contents: [{ role: 'user', parts: [{ text: t.search ? 'SOS Sportswear of Sweden 是哪一年创立的？请搜索后只回答年份。' : '只回答：OK' }] }],
+  // ---------- Me / export import ----------
+  async function renderMe() {
+    await refreshCaches();
+    const photoCount = await countPhotos();
+    $('stats-text').textContent =
+      `品牌 ${brandsCache.length} 个 · 淘货 ${findsCache.length} 条 · 照片 ${photoCount} 张`;
+    $('app-version').textContent = APP_VERSION;
+  }
+
+  async function countPhotos() {
+    const tx = db.transaction('photos', 'readonly');
+    const all = await storeGetAll(tx.objectStore('photos'));
+    return all.length;
+  }
+
+  async function exportBackup() {
+    await refreshCaches();
+    const tx = db.transaction('photos', 'readonly');
+    const photos = await storeGetAll(tx.objectStore('photos'));
+    const photoPayload = [];
+    for (const p of photos) {
+      const dataURL = await blobToDataURL(p.blob);
+      photoPayload.push({ id: p.id, dataURL, createdAt: p.createdAt });
+    }
+    const payload = {
+      app: 'yimai-brand-finder',
+      version: APP_VERSION,
+      exportedAt: new Date().toISOString(),
+      brands: brandsCache,
+      finds: findsCache,
+      photos: photoPayload,
     };
-    if (t.search) body.tools = [{ googleSearch: {} }];
-    const cell = $(`#t-${i}`);
-    try {
-      const data = await callGemini(t.model, body, key);
-      const out = extractResponse(data);
-      if (t.search) cell.textContent = out.sources.length ? `✅ 可联网（${out.sources.length} 个来源）` : '⚠️ 可用，但这次没搜索';
-      else cell.textContent = '✅ 可用';
-    } catch (e) {
-      cell.textContent = `❌ ${e.fatal ? '密钥无效' : e.status ? e.status : ''} ${e.code === 'NETWORK' ? '连不上 Google' : ''}`.trim();
-      cell.title = e.message;
-      const row = cell.parentElement;
-      const msg = document.createElement('div');
-      msg.className = 'hint';
-      msg.textContent = e.message.slice(0, 220);
-      row.after(msg);
-    }
-  }));
-  $('#btn-test').disabled = false;
-}
-
-/* ---------------- 事件绑定 ---------------- */
-function bind() {
-  $('#btn-history').onclick = () => show('history');
-  $('#btn-settings').onclick = () => show('settings');
-  $('#btn-back').onclick = () => show(state.view === 'result' ? 'history' : 'home');
-  document.addEventListener('click', (e) => {
-    const go = e.target.closest('[data-go]');
-    if (go) show(go.dataset.go);
-    const del = e.target.closest('[data-del]');
-    if (del) {
-      state.photos = state.photos.filter((p) => p.id !== del.dataset.del);
-      renderPhotos();
-    }
-    const item = e.target.closest('.h-item');
-    if (item) {
-      db.get(item.dataset.id).then((rec) => { if (rec) { renderResult(rec); show('result'); } });
-    }
-  });
-  $('#dismiss-install').onclick = () => { localStorage.setItem(LS.installDismissed, '1'); refreshHome(); };
-  for (const id of ['#input-camera', '#input-album']) {
-    $(id).addEventListener('change', async (e) => { await addFiles(e.target.files); e.target.value = ''; });
+    const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `yimai-backup-${todayISO()}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    toast('已导出备份');
   }
-  $('#btn-analyze').onclick = runAnalyze;
-  $('#btn-cancel').onclick = () => state.abort && state.abort.abort();
 
-  $('#btn-toggle-key').onclick = () => {
-    const i = $('#api-key');
-    i.type = i.type === 'password' ? 'text' : 'password';
-    $('#btn-toggle-key').textContent = i.type === 'password' ? '显示' : '隐藏';
-  };
-  $('#btn-save-key').onclick = () => {
-    const v = $('#api-key').value.trim();
-    if (!v) { toast('密钥是空的'); return; }
-    if (!/^[A-Za-z0-9_\-.]{20,}$/.test(v)) { toast('密钥格式看起来不对，请检查'); }
-    settings.key = v;
-    loadSettingsForm();
-    toast('已保存');
-  };
-  $('#btn-clear-key').onclick = () => {
-    if (!confirm('从这台手机上清除密钥？')) return;
-    settings.key = '';
-    loadSettingsForm();
-    toast('已清除');
-  };
-  $('#model').onchange = () => { $('#model-custom').hidden = $('#model').value !== 'custom'; };
-  $('#btn-save-model').onclick = () => {
-    const sel = $('#model').value;
-    const m = sel === 'custom' ? $('#model-custom').value.trim() : sel;
-    if (!m) { toast('请填写模型名'); return; }
-    settings.model = m;
-    settings.search = $('#opt-search').checked;
-    settings.fallback = $('#opt-fallback').checked;
-    settings.fallbackModel = $('#fallback-model').value.trim() || DEFAULT_FALLBACK_MODEL;
-    toast('已保存');
-  };
-  $('#btn-test').onclick = runTest;
-  $('#btn-clear-history').onclick = async () => {
-    if (!confirm('确定清空所有历史记录？不能恢复。')) return;
-    await db.clear();
-    loadSettingsForm();
-    toast('已清空');
-  };
-}
+  async function importBackup(file) {
+    let text;
+    try {
+      text = await file.text();
+    } catch {
+      toast('无法读取文件');
+      return;
+    }
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      toast('不是有效的 JSON');
+      return;
+    }
+    if (!data || !Array.isArray(data.brands) || !Array.isArray(data.finds)) {
+      toast('备份格式不对');
+      return;
+    }
+    if (!confirm('导入会覆盖当前全部数据，确定继续？')) return;
 
-bind();
-show('home');
-renderPhotos();
+    revokeAllURLs();
+    const tx = db.transaction(['brands', 'finds', 'photos', 'meta'], 'readwrite');
+    await storeClear(tx.objectStore('brands'));
+    await storeClear(tx.objectStore('finds'));
+    await storeClear(tx.objectStore('photos'));
+    await txDone(tx);
 
-if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('sw.js').catch((e) => console.warn('SW 注册失败', e));
-  });
-}
+    for (const b of data.brands) await putBrand(b);
+    for (const f of data.finds) await putFind(f);
+    for (const p of data.photos || []) {
+      try {
+        const blob = dataURLtoBlob(p.dataURL);
+        await putPhoto(p.id, blob);
+      } catch { /* skip bad photo */ }
+    }
+    await setMeta('seeded', true);
+    await refreshCaches();
+    toast('导入完成');
+    showTab('brands');
+  }
+
+  // ---------- Lightbox ----------
+  function showLightbox(url) {
+    const overlay = document.createElement('div');
+    overlay.className = 'lightbox';
+    overlay.innerHTML = `<button class="lightbox-close" aria-label="关闭">×</button><img src="${url}" alt="">`;
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay || e.target.classList.contains('lightbox-close')) {
+        overlay.remove();
+      }
+    });
+    document.body.appendChild(overlay);
+  }
+
+  // ---------- Event wiring ----------
+  function wire() {
+    document.querySelectorAll('.nav-item').forEach((btn) => {
+      btn.addEventListener('click', () => showTab(btn.dataset.tab));
+    });
+    $('btn-back').addEventListener('click', goBack);
+    $('btn-add').addEventListener('click', () => {
+      if (currentTab === 'brands') openBrandEdit(null);
+      else if (currentTab === 'finds') openFindEdit(null);
+    });
+
+    $('brands-filter').addEventListener('input', () => renderBrandsList());
+    $('finds-filter').addEventListener('input', () => renderFindsList());
+    $('global-search').addEventListener('input', () => runSearch());
+
+    $('brand-form').addEventListener('submit', saveBrand);
+    $('find-form').addEventListener('submit', saveFind);
+
+    $('bf-delete').addEventListener('click', async () => {
+      const id = $('bf-id').value;
+      if (!id) return;
+      if (!confirm('删除这个品牌？关联的淘货也会一起删掉。')) return;
+      await deleteBrand(id);
+      clearCoverPending();
+      toast('已删除');
+      stack = [];
+      showTab('brands');
+    });
+
+    $('ff-delete').addEventListener('click', async () => {
+      const id = $('ff-id').value;
+      if (!id) return;
+      if (!confirm('删除这条淘货记录？')) return;
+      await deleteFind(id);
+      clearFindPhotosPending();
+      toast('已删除');
+      stack = [];
+      showTab('finds');
+    });
+
+    // cover photo inputs
+    $('bf-cover-camera').addEventListener('change', async (e) => {
+      const file = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (!file) return;
+      try {
+        const blob = await compressImage(file);
+        clearCoverPending();
+        editingBrandCoverId = null;
+        pendingCoverBlob = blob;
+        pendingCoverPreviewURL = URL.createObjectURL(blob);
+        await renderCoverPreview();
+      } catch { toast('图片处理失败'); }
+    });
+    $('bf-cover-album').addEventListener('change', async (e) => {
+      const file = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (!file) return;
+      try {
+        const blob = await compressImage(file);
+        clearCoverPending();
+        editingBrandCoverId = null;
+        pendingCoverBlob = blob;
+        pendingCoverPreviewURL = URL.createObjectURL(blob);
+        await renderCoverPreview();
+      } catch { toast('图片处理失败'); }
+    });
+
+    $('ff-camera').addEventListener('change', async (e) => {
+      await addFindPhotos(e.target.files);
+      e.target.value = '';
+    });
+    $('ff-album').addEventListener('change', async (e) => {
+      await addFindPhotos(e.target.files);
+      e.target.value = '';
+    });
+
+    $('btn-export').addEventListener('click', () => exportBackup().catch(() => toast('导出失败')));
+    $('input-import').addEventListener('change', async (e) => {
+      const file = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (file) await importBackup(file);
+    });
+
+    const dismiss = $('dismiss-install');
+    if (dismiss) {
+      dismiss.addEventListener('click', () => {
+        $('install-tip').hidden = true;
+        try { localStorage.setItem('yimai-install-dismissed', '1'); } catch {}
+      });
+    }
+
+    // delegated clicks
+    document.body.addEventListener('click', async (e) => {
+      const t = e.target.closest('[data-action],[data-open-brand],[data-open-find],[data-edit-brand],[data-edit-find],[data-new-find-for],[data-copy-brand],[data-remove-cover],[data-remove-find-photo],[data-lightbox]');
+      if (!t) return;
+
+      if (t.dataset.action === 'new-brand') { openBrandEdit(null); return; }
+      if (t.dataset.action === 'new-find') { openFindEdit(null); return; }
+      if (t.dataset.openBrand) {
+        // if already in a detail stack and clicking brand from find, just open
+        await openBrandDetail(t.dataset.openBrand);
+        return;
+      }
+      if (t.dataset.openFind) { await openFindDetail(t.dataset.openFind); return; }
+      if (t.dataset.editBrand) { await openBrandEdit(t.dataset.editBrand); return; }
+      if (t.dataset.editFind) { await openFindEdit(t.dataset.editFind); return; }
+      if (t.dataset.newFindFor) { await openFindEdit(null, t.dataset.newFindFor); return; }
+      if (t.dataset.copyBrand) { await copyBrandText(t.dataset.copyBrand); return; }
+      if (t.hasAttribute('data-remove-cover')) {
+        clearCoverPending();
+        editingBrandCoverId = null;
+        await renderCoverPreview();
+        return;
+      }
+      if (t.dataset.removeFindPhoto != null) {
+        const i = Number(t.dataset.removeFindPhoto);
+        const p = pendingFindPhotos[i];
+        if (p && p.previewURL && !p.existingId) URL.revokeObjectURL(p.previewURL);
+        pendingFindPhotos.splice(i, 1);
+        renderFindPhotosPreview();
+        return;
+      }
+      if (t.dataset.lightbox) { showLightbox(t.dataset.lightbox); return; }
+    });
+  }
+
+  // ---------- Install tip + SW ----------
+  function maybeShowInstallTip() {
+    const tip = $('install-tip');
+    if (!tip) return;
+    let dismissed = false;
+    try { dismissed = localStorage.getItem('yimai-install-dismissed') === '1'; } catch {}
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+      || window.navigator.standalone === true;
+    tip.hidden = dismissed || isStandalone;
+  }
+
+  function registerSW() {
+    if (!('serviceWorker' in navigator)) return;
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  }
+
+  // ---------- Boot ----------
+  async function boot() {
+    try {
+      db = await openDB();
+      await ensureSeed();
+      wire();
+      maybeShowInstallTip();
+      registerSW();
+      showTab('brands');
+    } catch (err) {
+      console.error(err);
+      document.body.innerHTML = `<main style="padding:24px;font-family:sans-serif"><h1>启动失败</h1><p>${esc(err && err.message)}</p><p>请用 Safari / Chrome 打开，并允许本站使用存储。</p></main>`;
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+})();

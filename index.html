@@ -3,15 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>尾货寻牌</title>
-  <meta name="description" content="拍下 logo、水洗标和细节，查品牌历史、同款链接和人民币价位。">
+  <title>衣脉 · 品牌知识库</title>
+  <meta name="description" content="个人品牌知识库：记录外贸市场淘到的冷门户外品牌故事、价位与成衣照片。数据只存在本机。">
   <meta name="theme-color" content="#1f3a2e">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="寻牌">
+  <meta name="apple-mobile-web-app-title" content="衣脉">
   <meta name="format-detection" content="telephone=no">
-  <meta name="referrer" content="no-referrer">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -20,124 +19,186 @@
 <body>
   <header class="topbar">
     <button class="icon-btn" id="btn-back" aria-label="返回" hidden>‹</button>
-    <h1 id="title">尾货寻牌</h1>
+    <h1 id="title">衣脉</h1>
     <div class="top-actions">
-      <button class="icon-btn" id="btn-history" aria-label="历史记录">历史</button>
-      <button class="icon-btn" id="btn-settings" aria-label="设置">设置</button>
+      <button class="icon-btn" id="btn-add" aria-label="添加" hidden>＋</button>
     </div>
   </header>
 
   <main>
-    <!-- 首页：拍照识别 -->
-    <section id="view-home" class="view">
-      <div id="key-banner" class="banner warn" hidden>
-        还没有填写 Gemini API 密钥。<button class="link-btn" data-go="settings">去设置 ›</button>
-      </div>
+    <!-- 品牌列表 -->
+    <section id="view-brands" class="view">
       <div id="install-tip" class="banner info" hidden>
-        在 Safari 里点底部 <b>分享按钮</b> → <b>添加到主屏幕</b>，用起来就像一个 app。
+        在 Safari 里点底部 <b>分享</b> → <b>添加到主屏幕</b>，用起来就像一个 app。
         <button class="link-btn" id="dismiss-install">知道了</button>
       </div>
+      <div class="search-bar">
+        <input id="brands-filter" type="search" placeholder="筛选品牌名、国家、标签…" enterkeyhint="search">
+      </div>
+      <div id="brands-list" class="list"></div>
+      <div id="brands-empty" class="empty" hidden>
+        <div class="empty-icon">🏷</div>
+        <p>还没有品牌</p>
+        <button class="btn primary" data-action="new-brand">添加第一个品牌</button>
+      </div>
+    </section>
 
+    <!-- 淘货列表 -->
+    <section id="view-finds" class="view" hidden>
+      <div class="search-bar">
+        <input id="finds-filter" type="search" placeholder="筛选淘货备注、品牌…" enterkeyhint="search">
+      </div>
+      <div id="finds-list" class="list"></div>
+      <div id="finds-empty" class="empty" hidden>
+        <div class="empty-icon">🧥</div>
+        <p>还没有淘到的衣服</p>
+        <button class="btn primary" data-action="new-find">记录第一件</button>
+      </div>
+    </section>
+
+    <!-- 搜索 -->
+    <section id="view-search" class="view" hidden>
+      <div class="search-bar sticky">
+        <input id="global-search" type="search" placeholder="搜品牌故事、价位、标签、淘货…" autofocus enterkeyhint="search">
+      </div>
+      <div id="search-results" class="list"></div>
+      <div id="search-empty" class="empty">
+        <div class="empty-icon">🔍</div>
+        <p>输入关键词，搜索你的品牌库和淘货记录</p>
+      </div>
+    </section>
+
+    <!-- 我的 / 备份 -->
+    <section id="view-me" class="view" hidden>
       <div class="card">
-        <h2>一件衣服的照片</h2>
-        <p class="hint">建议拍：logo、水洗标/成分标、吊牌或款号标签、面料和做工细节。最多 6 张。</p>
-        <div id="photo-grid" class="photo-grid"></div>
+        <h2>数据统计</h2>
+        <p class="hint" id="stats-text">—</p>
+      </div>
+      <div class="card">
+        <h2>备份与恢复</h2>
+        <p class="hint">所有数据（品牌、淘货、照片）只存在这台手机上。导出 JSON 备份到文件，换机或重装时可导入。</p>
         <div class="row">
-          <label class="btn primary grow">
-            📷 拍照
-            <input id="input-camera" type="file" accept="image/*" capture="environment" hidden>
-          </label>
+          <button id="btn-export" class="btn primary grow">导出备份</button>
           <label class="btn grow">
-            🖼️ 从相册选
-            <input id="input-album" type="file" accept="image/*" multiple hidden>
+            导入备份
+            <input id="input-import" type="file" accept="application/json,.json" hidden>
           </label>
         </div>
+        <p class="hint warn-text">导入会<strong>覆盖</strong>当前全部数据，请先导出一份再导入。</p>
       </div>
-
-      <div class="card">
-        <label class="field-label" for="note">补充说明（可选）</label>
-        <textarea id="note" rows="2" placeholder="比如：吊牌上写着 xxx，市场价 80 元"></textarea>
-      </div>
-
-      <button id="btn-analyze" class="btn primary big" disabled>开始识别</button>
-
-      <div id="loading" class="card loading" hidden>
-        <div class="spinner"></div>
-        <div>
-          <div id="loading-text">正在识别并联网搜索…</div>
-          <div class="hint"><span id="loading-timer">0</span> 秒 · 通常需要 20–60 秒</div>
-        </div>
-        <button id="btn-cancel" class="btn small">取消</button>
-      </div>
-      <div id="home-error" class="banner error" hidden></div>
-    </section>
-
-    <!-- 结果 -->
-    <section id="view-result" class="view" hidden>
-      <div id="result"></div>
-    </section>
-
-    <!-- 历史 -->
-    <section id="view-history" class="view" hidden>
-      <div id="history-list"></div>
-    </section>
-
-    <!-- 设置 -->
-    <section id="view-settings" class="view" hidden>
-      <div class="card">
-        <h2>Gemini API 密钥</h2>
-        <p class="hint">在 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> 用 Google 账号登录，点 “Create API key” 获取。密钥只保存在这台手机上，不会上传到任何别的地方。</p>
-        <div class="row">
-          <input id="api-key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="粘贴以 AIza 开头的密钥">
-          <button id="btn-toggle-key" class="btn small" type="button">显示</button>
-        </div>
-        <div class="row">
-          <button id="btn-save-key" class="btn primary grow">保存</button>
-          <button id="btn-clear-key" class="btn grow">清除</button>
-        </div>
-        <div id="key-status" class="hint"></div>
-      </div>
-
-      <div class="card">
-        <h2>模型</h2>
-        <label class="field-label" for="model">首选模型</label>
-        <select id="model">
-          <option value="gemini-2.5-flash">gemini-2.5-flash（免费层可能可联网，推荐先试）</option>
-          <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite（更快）</option>
-          <option value="gemini-3.8-flash">gemini-3.8-flash（最新，联网需开通付费）</option>
-          <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite（联网需开通付费）</option>
-          <option value="custom">自定义…</option>
-        </select>
-        <input id="model-custom" type="text" placeholder="模型名，例如 gemini-3.8-flash" hidden autocapitalize="off" spellcheck="false">
-
-        <label class="switch"><input id="opt-search" type="checkbox" checked> 联网搜索（Google Search）</label>
-        <label class="switch"><input id="opt-fallback" type="checkbox" checked> 失败时自动换模型 / 不联网重试</label>
-        <label class="field-label" for="fallback-model">不联网时使用的模型</label>
-        <input id="fallback-model" type="text" value="gemini-3.8-flash" autocapitalize="off" spellcheck="false">
-        <button id="btn-save-model" class="btn primary">保存模型设置</button>
-        <p class="hint">Google 免费层目前只有 Gemini 2.5 系列能用联网搜索（每天约 500 次），而且 2.5 只对“以前用过的账号”开放。新账号如果 2.5 用不了，可以开通付费（Gemini 3 系列每月前 5000 次搜索免费），或者用“不联网”模式只识别品牌。具体以 Google 官网为准。</p>
-      </div>
-
-      <div class="card">
-        <h2>测试连接</h2>
-        <p class="hint">用一个很小的问题测试密钥和各模型能不能联网，会消耗几次免费额度。</p>
-        <button id="btn-test" class="btn">开始测试</button>
-        <div id="test-result"></div>
-      </div>
-
-      <div class="card">
-        <h2>历史记录</h2>
-        <p class="hint" id="history-count"></p>
-        <button id="btn-clear-history" class="btn danger">清空所有历史</button>
-      </div>
-
       <div class="card">
         <h2>关于</h2>
-        <p class="hint">照片会直接从手机发送到 Google Gemini 进行识别，不经过其他服务器。识别结果由 AI 生成，可能有误，发帖前请核对来源链接。在国内使用需要能访问 Google。</p>
-        <p class="hint">版本 <span id="app-version"></span></p>
+        <p class="hint">衣脉是纯本地的个人品牌知识库，不调用任何 AI 或联网接口。适合记录外贸市场淘到的冷门户外品牌故事、价位参考和成衣照片。</p>
+        <p class="hint">版本 <span id="app-version">2.0.0</span></p>
       </div>
     </section>
+
+    <!-- 品牌详情 -->
+    <section id="view-brand-detail" class="view" hidden>
+      <div id="brand-detail"></div>
+    </section>
+
+    <!-- 品牌编辑 -->
+    <section id="view-brand-edit" class="view" hidden>
+      <form id="brand-form" class="form" autocomplete="off">
+        <input type="hidden" id="bf-id">
+        <div class="card">
+          <h2 id="bf-title">新品牌</h2>
+          <label class="field-label" for="bf-name">品牌名 *</label>
+          <input id="bf-name" type="text" required placeholder="例如 SOS / Sportswear of Sweden">
+          <label class="field-label" for="bf-country">国家 / 地区</label>
+          <input id="bf-country" type="text" placeholder="例如 瑞典">
+          <label class="field-label" for="bf-year">创立年份</label>
+          <input id="bf-year" type="text" inputmode="numeric" placeholder="例如 1982">
+          <label class="field-label" for="bf-founder">创始人 / 现所有者</label>
+          <input id="bf-founder" type="text" placeholder="可选">
+          <label class="field-label" for="bf-positioning">主打定位</label>
+          <input id="bf-positioning" type="text" placeholder="例如 滑雪服 / 户外生活方式">
+          <label class="field-label" for="bf-tags">标签（空格或逗号分隔）</label>
+          <input id="bf-tags" type="text" placeholder="滑雪 瑞典 针织 防风">
+        </div>
+        <div class="card">
+          <label class="field-label" for="bf-story">品牌故事</label>
+          <textarea id="bf-story" rows="6" placeholder="历史、创立背景、有趣的故事…"></textarea>
+          <label class="field-label" for="bf-notes">有趣的事 / 备注</label>
+          <textarea id="bf-notes" rows="3" placeholder="碎片信息、你自己的观察…"></textarea>
+          <label class="field-label" for="bf-price">价位参考</label>
+          <textarea id="bf-price" rows="3" placeholder="例如：抓绒大概 ¥xxx；羽绒服大概 ¥xxx；官网针织衫约 ¥1350–1500"></textarea>
+        </div>
+        <div class="card">
+          <label class="field-label">封面 / Logo 照片（可选）</label>
+          <div id="bf-cover-preview" class="photo-grid single"></div>
+          <div class="row">
+            <label class="btn grow">
+              📷 拍照
+              <input id="bf-cover-camera" type="file" accept="image/*" capture="environment" hidden>
+            </label>
+            <label class="btn grow">
+              🖼️ 相册
+              <input id="bf-cover-album" type="file" accept="image/*" hidden>
+            </label>
+          </div>
+        </div>
+        <button type="submit" class="btn primary big">保存</button>
+        <button type="button" id="bf-delete" class="btn danger big" hidden>删除这个品牌</button>
+      </form>
+    </section>
+
+    <!-- 淘货详情 -->
+    <section id="view-find-detail" class="view" hidden>
+      <div id="find-detail"></div>
+    </section>
+
+    <!-- 淘货编辑 -->
+    <section id="view-find-edit" class="view" hidden>
+      <form id="find-form" class="form" autocomplete="off">
+        <input type="hidden" id="ff-id">
+        <div class="card">
+          <h2 id="ff-title">新淘货</h2>
+          <label class="field-label" for="ff-brand">关联品牌</label>
+          <select id="ff-brand">
+            <option value="">— 暂不关联 —</option>
+          </select>
+          <label class="field-label" for="ff-date">日期</label>
+          <input id="ff-date" type="date">
+          <label class="field-label" for="ff-notes">备注</label>
+          <textarea id="ff-notes" rows="4" placeholder="哪里买的、尺码、成色、花了多少钱…"></textarea>
+        </div>
+        <div class="card">
+          <label class="field-label">照片（可多张）</label>
+          <p class="hint">建议拍：正面、logo、水洗标、细节。最多 12 张。</p>
+          <div id="ff-photos" class="photo-grid"></div>
+          <div class="row">
+            <label class="btn grow">
+              📷 拍照
+              <input id="ff-camera" type="file" accept="image/*" capture="environment" hidden>
+            </label>
+            <label class="btn grow">
+              🖼️ 相册
+              <input id="ff-album" type="file" accept="image/*" multiple hidden>
+            </label>
+          </div>
+        </div>
+        <button type="submit" class="btn primary big">保存</button>
+        <button type="button" id="ff-delete" class="btn danger big" hidden>删除这条淘货</button>
+      </form>
+    </section>
   </main>
+
+  <nav class="bottom-nav" id="bottom-nav">
+    <button class="nav-item active" data-tab="brands" aria-label="品牌">
+      <span class="nav-icon">🏷</span><span>品牌</span>
+    </button>
+    <button class="nav-item" data-tab="finds" aria-label="淘货">
+      <span class="nav-icon">🧥</span><span>淘货</span>
+    </button>
+    <button class="nav-item" data-tab="search" aria-label="搜索">
+      <span class="nav-icon">🔍</span><span>搜索</span>
+    </button>
+    <button class="nav-item" data-tab="me" aria-label="我的">
+      <span class="nav-icon">⚙️</span><span>我的</span>
+    </button>
+  </nav>
 
   <div id="toast" class="toast" hidden></div>
   <script src="app.js"></script>
