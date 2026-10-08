@@ -2,7 +2,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { SUPABASE_URL, SUPABASE_ANON_KEY, STORAGE_BUCKET } from './config.js';
 
-const APP_VERSION = '3.0.0';
+const APP_VERSION = '3.0.1';
 const MAX_FIND_PHOTOS = 12;
 const IMG_MAX_EDGE = 1600;
 const IMG_QUALITY = 0.85;
@@ -217,7 +217,7 @@ async function getFind(id) {
   return data ? mapFind(data) : null;
 }
 
-const SOS_SAMPLE = {
+const SOS_SEED = {
   name: 'SOS · Sportswear of Sweden',
   country: '瑞典',
   founded_year: '1982',
@@ -229,14 +229,14 @@ const SOS_SAMPLE = {
     '2011 年，在丹麦代理 SOS 多年的 Ole Damm 买下了全球品牌权，总部也搬到了丹麦。他说 SOS 从 1985 年起就是他的「心头宝」。\n\n' +
     '80 年代 SOS 就以大胆、张扬的配色出名，口号是 “Rethink your life in color”。2009 年赞助过瑞典国家雪上技巧队，被滑雪选手称为「一个代表快乐的叛逆滑雪品牌」。',
   interesting:
-    '标识很好认：白色三角大 logo。防风针织衫是代表品类之一：外层羊毛+腈纶，里面有防风内衬，拉链常用 YKK。\n\n（这是示例品牌，可以随时删除。）',
+    '标识很好认：白色三角大 logo。防风针织衫是代表品类之一：外层羊毛+腈纶，里面有防风内衬，拉链常用 YKK。',
   price_notes: '防风针织衫（如 Tignes）官网正价大约 ¥1350–1500；欧洲店打折后常见 ¥840–1240。抓绒、羽绒具体看款，市场尾货价格另计。',
-  tags: ['滑雪', '瑞典', '针织', '防风', '户外', 'SOS', '示例'],
+  tags: ['滑雪', '瑞典', '针织', '防风', '户外', 'SOS'],
 };
 
 async function ensureSeed() {
   if (brandsCache.length > 0) return;
-  const { error } = await supabase.from('brands').insert(SOS_SAMPLE);
+  const { error } = await supabase.from('brands').insert(SOS_SEED);
   if (error) throw error;
   await loadAll();
 }
@@ -317,11 +317,13 @@ function findMatches(f, q, brandMap) {
 }
 
 // ---------- Brand UI ----------
-async function renderBrandsList() {
-  try {
-    await refreshCaches();
-  } catch {
-    // banner already set
+async function renderBrandsList(opts) {
+  if (!opts || opts.refresh !== false) {
+    try {
+      await refreshCaches();
+    } catch {
+      // banner already set
+    }
   }
   const q = ($('brands-filter').value || '').trim().toLowerCase();
   const list = brandsCache.filter((b) => brandMatches(b, q));
@@ -596,10 +598,12 @@ function clearFindPhotosPending() {
   pendingFindPhotos = [];
 }
 
-async function renderFindsList() {
-  try {
-    await refreshCaches();
-  } catch { /* banner */ }
+async function renderFindsList(opts) {
+  if (!opts || opts.refresh !== false) {
+    try {
+      await refreshCaches();
+    } catch { /* banner */ }
+  }
   const brandMap = new Map(brandsCache.map((b) => [b.id, b]));
   const q = ($('finds-filter').value || '').trim().toLowerCase();
   const list = findsCache.filter((f) => findMatches(f, q, brandMap));
@@ -1062,7 +1066,108 @@ function showLightbox(url) {
 }
 
 // ---------- Wire ----------
+function wirePullToRefresh() {
+  const THRESHOLD = 64;
+  let startY = 0;
+  let startX = 0;
+  let active = false;
+  let pull = 0;
+  let refreshing = false;
+
+  const el = document.getElementById('ptr');
+  const label = document.getElementById('ptr-label');
+  if (!el) return;
+
+  function atTop() {
+    return (window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0) <= 0;
+  }
+
+  function listTab() {
+    return !document.body.classList.contains('detail-mode')
+      && (currentTab === 'brands' || currentTab === 'finds');
+  }
+
+  function place() {
+    const bar = document.querySelector('.topbar');
+    if (bar) el.style.top = bar.getBoundingClientRect().bottom + 'px';
+  }
+
+  function show(px, mode) {
+    place();
+    if (px <= 0 && mode !== 'refreshing') {
+      el.hidden = true;
+      el.style.height = '0px';
+      el.classList.remove('refreshing');
+      return;
+    }
+    el.hidden = false;
+    el.style.height = Math.min(px, 44) + 'px';
+    el.classList.toggle('refreshing', mode === 'refreshing');
+    if (label) {
+      label.textContent = mode === 'refreshing' ? '刷新中…' : mode === 'ready' ? '松开刷新' : '下拉刷新';
+    }
+  }
+
+  document.addEventListener('touchstart', (e) => {
+    active = false;
+    pull = 0;
+    if (refreshing || !listTab() || e.touches.length !== 1 || !atTop()) return;
+    const t = e.target;
+    if (t && t.closest && t.closest('input, textarea, select, button, a, label')) return;
+    startY = e.touches[0].clientY;
+    startX = e.touches[0].clientX;
+    active = true;
+  }, { passive: true });
+
+  document.addEventListener('touchmove', (e) => {
+    if (!active || refreshing) return;
+    const dy = e.touches[0].clientY - startY;
+    const dx = e.touches[0].clientX - startX;
+    if (!atTop() || dy <= 0 || Math.abs(dx) > Math.abs(dy) + 6) {
+      active = false;
+      pull = 0;
+      show(0);
+      return;
+    }
+    pull = Math.min(dy * 0.45, 88);
+    show(pull, pull >= THRESHOLD ? 'ready' : 'pull');
+    if (e.cancelable) e.preventDefault();
+  }, { passive: false });
+
+  async function endPull() {
+    if (!active) return;
+    active = false;
+    const should = pull >= THRESHOLD && listTab();
+    pull = 0;
+    if (!should) {
+      show(0);
+      return;
+    }
+    refreshing = true;
+    show(44, 'refreshing');
+    const tab = currentTab;
+    try {
+      await refreshCaches();
+      if (tab === 'brands') await renderBrandsList({ refresh: false });
+      else if (tab === 'finds') await renderFindsList({ refresh: false });
+    } catch {
+      // refreshCaches already shows the net banner
+    } finally {
+      refreshing = false;
+      show(0);
+    }
+  }
+
+  document.addEventListener('touchend', endPull);
+  document.addEventListener('touchcancel', () => {
+    active = false;
+    pull = 0;
+    if (!refreshing) show(0);
+  });
+}
+
 function wire() {
+  wirePullToRefresh();
   document.querySelectorAll('.nav-item').forEach((btn) => {
     btn.addEventListener('click', () => showTab(btn.dataset.tab));
   });

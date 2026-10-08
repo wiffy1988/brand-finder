@@ -17,9 +17,20 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 [hidden] { display: none !important; }
 html, body { margin: 0; padding: 0; }
+/* Literal brand green (not a custom property). iOS 26 samples the root and
+   the sticky top bar for the status-bar tint; a variable or a transparent
+   root falls through to a white frost. */
+html { background-color: #1f3a2e; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
-  background: var(--bg);
+  /* Page stays cream. The top safe-area strip is solid brand green because
+     iOS blurs the scrolling document (not the sticky bar) behind the status
+     bar — a cream/transparent strip there is the white haze. */
+  background-color: #f4f1ea;
+  background-image: linear-gradient(#1f3a2e, #1f3a2e);
+  background-repeat: no-repeat;
+  background-size: 100% var(--safe-top);
+  background-position: top left;
   color: var(--ink);
   font-size: 16px;
   line-height: 1.55;
@@ -29,11 +40,23 @@ body {
 body.detail-mode { padding-bottom: var(--safe-bottom); }
 body.detail-mode .bottom-nav { display: none; }
 
+/* Opaque plate in the status-bar slot, above the scrolling haze. */
+body::before {
+  content: "";
+  position: fixed;
+  z-index: 40;
+  top: 0; left: 0; right: 0;
+  height: var(--safe-top);
+  background-color: #1f3a2e;
+  pointer-events: none;
+}
+
 .topbar {
   position: sticky; top: 0; z-index: 20;
   display: flex; align-items: center; gap: 8px;
   padding: calc(var(--safe-top) + 10px) 14px 10px;
-  background: var(--brand); color: #fffaf0;
+  background-color: #1f3a2e;
+  color: #fffaf0;
 }
 .topbar h1 { font-size: 18px; margin: 0; flex: 1; font-weight: 600; letter-spacing: .5px; }
 .top-actions { display: flex; gap: 6px; }
@@ -95,6 +118,33 @@ textarea { resize: vertical; min-height: 72px; }
 .banner.info { background: #e8f0ec; border: 1px solid #c6d9cf; }
 .banner.warn { background: #fff4d6; border: 1px solid #f0d58a; }
 .banner.sample { background: #fff8e6; border: 1px dashed #e0c47a; color: #6b5420; font-size: 13px; }
+
+.ptr {
+  position: fixed;
+  z-index: 25;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  background: var(--bg);
+  pointer-events: none;
+}
+.ptr-spin {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--line);
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  flex: none;
+}
+.ptr.refreshing .ptr-spin { animation: ptr-spin .7s linear infinite; }
+@keyframes ptr-spin { to { transform: rotate(360deg); } }
 
 .search-bar { margin-bottom: 4px; }
 .search-bar.sticky { position: sticky; top: calc(var(--safe-top) + 48px); z-index: 5; background: var(--bg); padding-bottom: 4px; }
@@ -175,10 +225,35 @@ textarea { resize: vertical; min-height: 72px; }
 
 .bottom-nav {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
-  display: flex; background: #fffdf8; border-top: 1px solid var(--line);
+  display: flex; background-color: #fffdf8; border-top: 1px solid var(--line);
   padding: 4px 0 calc(4px + var(--safe-bottom));
   max-width: 680px; margin: 0 auto;
 }
+/* Home-screen iOS lays out position:fixed;bottom:0 on a viewport that ends
+   one top-safe-area short of the glass. On this phone that gap is 59pt of
+   cream under the tab bar. Shift the bar down by that inset. Its own
+   safe-bottom padding still holds the icons above the home indicator. */
+html.standalone .bottom-nav {
+  bottom: calc(0px - var(--safe-top));
+}
+html.standalone .bottom-nav::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: var(--safe-top);
+  background-color: #fffdf8;
+}
+html.standalone body {
+  padding-bottom: max(12px, calc(var(--nav-h) + var(--safe-bottom) - var(--safe-top)));
+  overscroll-behavior-y: none;
+}
+html.standalone body.detail-mode { padding-bottom: var(--safe-bottom); }
+html.standalone .toast {
+  bottom: calc(var(--nav-h) + var(--safe-bottom) + 16px - var(--safe-top));
+}
+html.standalone body.detail-mode .toast { bottom: calc(var(--safe-bottom) + 24px); }
 .nav-item {
   flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px;
   background: none; border: 0; padding: 6px 4px; cursor: pointer;
