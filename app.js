@@ -2,7 +2,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { SUPABASE_URL, SUPABASE_ANON_KEY, STORAGE_BUCKET } from './config.js';
 
-const APP_VERSION = '3.0.2';
+const APP_VERSION = '3.0.3';
 const MAX_FIND_PHOTOS = 12;
 const IMG_MAX_EDGE = 1600;
 const IMG_QUALITY = 0.85;
@@ -1139,8 +1139,8 @@ function wirePullToRefresh() {
   if (!el) return;
 
   function atTop() {
-    const main = document.querySelector('main');
-    if (main) return main.scrollTop <= 0;
+    const scroller = document.querySelector('#app > main');
+    if (scroller) return scroller.scrollTop <= 0;
     return (window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0) <= 0;
   }
 

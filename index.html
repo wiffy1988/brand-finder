@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <title>衣脉 · 品牌知识库</title>
   <meta name="description" content="个人品牌知识库：记录外贸市场淘到的冷门户外品牌故事、价位与成衣照片。数据同步到 Supabase 云端。">
   <meta name="theme-color" content="#1f3a2e" media="(prefers-color-scheme: light)">
@@ -15,7 +15,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="styles.css?v=3.0.2">
+  <link rel="stylesheet" href="styles.css?v=3.0.3">
   <script>
     /* iOS 26 ignores a static theme-color until script writes it.
        Status bar stays black-translucent so the green topbar (not the page)
@@ -24,10 +24,17 @@
       var color = '#1f3a2e';
       var nodes = document.querySelectorAll('meta[name="theme-color"]');
       for (var i = 0; i < nodes.length; i++) nodes[i].setAttribute('content', color);
+      var standalone = false;
+      try {
+        standalone = window.navigator.standalone === true ||
+          window.matchMedia('(display-mode: standalone)').matches;
+      } catch (e) {}
+      if (standalone) document.documentElement.classList.add('standalone');
     })();
   </script>
 </head>
 <body>
+  <div id="app">
   <header class="topbar" style="background-color:#1f3a2e">
     <button class="icon-btn" id="btn-back" aria-label="返回" hidden>‹</button>
     <h1 id="title">衣脉</h1>
@@ -110,7 +117,7 @@
       <div class="card">
         <h2>关于</h2>
         <p class="hint">衣脉是个人品牌知识库，不调用 AI 识图。适合记录外贸市场淘到的冷门户外品牌故事、价位参考和成衣照片。</p>
-        <p class="hint">版本 <span id="app-version">3.0.2</span></p>
+        <p class="hint">版本 <span id="app-version">3.0.3</span></p>
       </div>
     </section>
 
@@ -220,8 +227,9 @@
       <span class="nav-icon">⚙️</span><span>我的</span>
     </button>
   </nav>
+  </div>
 
   <div id="toast" class="toast" hidden></div>
-  <script type="module" src="app.js?v=3.0.2"></script>
+  <script type="module" src="app.js?v=3.0.3"></script>
 </body>
 </html>
