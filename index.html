@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>尾货寻牌</title>
+  <meta name="description" content="拍下 logo、水洗标和细节，查品牌历史、同款链接和人民币价位。">
+  <meta name="theme-color" content="#1f3a2e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="寻牌">
+  <meta name="format-detection" content="telephone=no">
+  <meta name="referrer" content="no-referrer">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <button class="icon-btn" id="btn-back" aria-label="返回" hidden>‹</button>
+    <h1 id="title">尾货寻牌</h1>
+    <div class="top-actions">
+      <button class="icon-btn" id="btn-history" aria-label="历史记录">历史</button>
+      <button class="icon-btn" id="btn-settings" aria-label="设置">设置</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- 首页：拍照识别 -->
+    <section id="view-home" class="view">
+      <div id="key-banner" class="banner warn" hidden>
+        还没有填写 Gemini API 密钥。<button class="link-btn" data-go="settings">去设置 ›</button>
+      </div>
+      <div id="install-tip" class="banner info" hidden>
+        在 Safari 里点底部 <b>分享按钮</b> → <b>添加到主屏幕</b>，用起来就像一个 app。
+        <button class="link-btn" id="dismiss-install">知道了</button>
+      </div>
+
+      <div class="card">
+        <h2>一件衣服的照片</h2>
+        <p class="hint">建议拍：logo、水洗标/成分标、吊牌或款号标签、面料和做工细节。最多 6 张。</p>
+        <div id="photo-grid" class="photo-grid"></div>
+        <div class="row">
+          <label class="btn primary grow">
+            📷 拍照
+            <input id="input-camera" type="file" accept="image/*" capture="environment" hidden>
+          </label>
+          <label class="btn grow">
+            🖼️ 从相册选
+            <input id="input-album" type="file" accept="image/*" multiple hidden>
+          </label>
+        </div>
+      </div>
+
+      <div class="card">
+        <label class="field-label" for="note">补充说明（可选）</label>
+        <textarea id="note" rows="2" placeholder="比如：吊牌上写着 xxx，市场价 80 元"></textarea>
+      </div>
+
+      <button id="btn-analyze" class="btn primary big" disabled>开始识别</button>
+
+      <div id="loading" class="card loading" hidden>
+        <div class="spinner"></div>
+        <div>
+          <div id="loading-text">正在识别并联网搜索…</div>
+          <div class="hint"><span id="loading-timer">0</span> 秒 · 通常需要 20–60 秒</div>
+        </div>
+        <button id="btn-cancel" class="btn small">取消</button>
+      </div>
+      <div id="home-error" class="banner error" hidden></div>
+    </section>
+
+    <!-- 结果 -->
+    <section id="view-result" class="view" hidden>
+      <div id="result"></div>
+    </section>
+
+    <!-- 历史 -->
+    <section id="view-history" class="view" hidden>
+      <div id="history-list"></div>
+    </section>
+
+    <!-- 设置 -->
+    <section id="view-settings" class="view" hidden>
+      <div class="card">
+        <h2>Gemini API 密钥</h2>
+        <p class="hint">在 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> 用 Google 账号登录，点 “Create API key” 获取。密钥只保存在这台手机上，不会上传到任何别的地方。</p>
+        <div class="row">
+          <input id="api-key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="粘贴以 AIza 开头的密钥">
+          <button id="btn-toggle-key" class="btn small" type="button">显示</button>
+        </div>
+        <div class="row">
+          <button id="btn-save-key" class="btn primary grow">保存</button>
+          <button id="btn-clear-key" class="btn grow">清除</button>
+        </div>
+        <div id="key-status" class="hint"></div>
+      </div>
+
+      <div class="card">
+        <h2>模型</h2>
+        <label class="field-label" for="model">首选模型</label>
+        <select id="model">
+          <option value="gemini-2.5-flash">gemini-2.5-flash（免费层可能可联网，推荐先试）</option>
+          <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite（更快）</option>
+          <option value="gemini-3.8-flash">gemini-3.8-flash（最新，联网需开通付费）</option>
+          <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite（联网需开通付费）</option>
+          <option value="custom">自定义…</option>
+        </select>
+        <input id="model-custom" type="text" placeholder="模型名，例如 gemini-3.8-flash" hidden autocapitalize="off" spellcheck="false">
+
+        <label class="switch"><input id="opt-search" type="checkbox" checked> 联网搜索（Google Search）</label>
+        <label class="switch"><input id="opt-fallback" type="checkbox" checked> 失败时自动换模型 / 不联网重试</label>
+        <label class="field-label" for="fallback-model">不联网时使用的模型</label>
+        <input id="fallback-model" type="text" value="gemini-3.8-flash" autocapitalize="off" spellcheck="false">
+        <button id="btn-save-model" class="btn primary">保存模型设置</button>
+        <p class="hint">Google 免费层目前只有 Gemini 2.5 系列能用联网搜索（每天约 500 次），而且 2.5 只对“以前用过的账号”开放。新账号如果 2.5 用不了，可以开通付费（Gemini 3 系列每月前 5000 次搜索免费），或者用“不联网”模式只识别品牌。具体以 Google 官网为准。</p>
+      </div>
+
+      <div class="card">
+        <h2>测试连接</h2>
+        <p class="hint">用一个很小的问题测试密钥和各模型能不能联网，会消耗几次免费额度。</p>
+        <button id="btn-test" class="btn">开始测试</button>
+        <div id="test-result"></div>
+      </div>
+
+      <div class="card">
+        <h2>历史记录</h2>
+        <p class="hint" id="history-count"></p>
+        <button id="btn-clear-history" class="btn danger">清空所有历史</button>
+      </div>
+
+      <div class="card">
+        <h2>关于</h2>
+        <p class="hint">照片会直接从手机发送到 Google Gemini 进行识别，不经过其他服务器。识别结果由 AI 生成，可能有误，发帖前请核对来源链接。在国内使用需要能访问 Google。</p>
+        <p class="hint">版本 <span id="app-version"></span></p>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>
