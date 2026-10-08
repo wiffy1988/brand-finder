@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>衣脉 · 品牌知识库</title>
-  <meta name="description" content="个人品牌知识库：记录外贸市场淘到的冷门户外品牌故事、价位与成衣照片。数据只存在本机。">
+  <meta name="description" content="个人品牌知识库：记录外贸市场淘到的冷门户外品牌故事、价位与成衣照片。数据同步到 Supabase 云端。">
   <meta name="theme-color" content="#1f3a2e">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
@@ -28,6 +28,7 @@
   <main>
     <!-- 品牌列表 -->
     <section id="view-brands" class="view">
+      <div id="net-banner" class="banner warn" hidden></div>
       <div id="install-tip" class="banner info" hidden>
         在 Safari 里点底部 <b>分享</b> → <b>添加到主屏幕</b>，用起来就像一个 app。
         <button class="link-btn" id="dismiss-install">知道了</button>
@@ -75,8 +76,13 @@
         <p class="hint" id="stats-text">—</p>
       </div>
       <div class="card">
-        <h2>备份与恢复</h2>
-        <p class="hint">所有数据（品牌、淘货、照片）只存在这台手机上。导出 JSON 备份到文件，换机或重装时可导入。</p>
+        <h2>云端同步</h2>
+        <p class="hint">品牌、淘货和照片存在 Supabase。你和助手改同一份数据，换手机打开同一网址即可。</p>
+        <p class="hint">首次使用前请在 Supabase SQL Editor 运行仓库里的 <code>supabase-schema.sql</code>。</p>
+      </div>
+      <div class="card">
+        <h2>备份与恢复（可选）</h2>
+        <p class="hint">云端已经是主数据源。导出 JSON 可做额外备份；导入会<strong>覆盖</strong>云端全部数据。</p>
         <div class="row">
           <button id="btn-export" class="btn primary grow">导出备份</button>
           <label class="btn grow">
@@ -84,12 +90,11 @@
             <input id="input-import" type="file" accept="application/json,.json" hidden>
           </label>
         </div>
-        <p class="hint warn-text">导入会<strong>覆盖</strong>当前全部数据，请先导出一份再导入。</p>
       </div>
       <div class="card">
         <h2>关于</h2>
-        <p class="hint">衣脉是纯本地的个人品牌知识库，不调用任何 AI 或联网接口。适合记录外贸市场淘到的冷门户外品牌故事、价位参考和成衣照片。</p>
-        <p class="hint">版本 <span id="app-version">2.0.0</span></p>
+        <p class="hint">衣脉是个人品牌知识库，不调用 AI 识图。适合记录外贸市场淘到的冷门户外品牌故事、价位参考和成衣照片。</p>
+        <p class="hint">版本 <span id="app-version">3.0.0</span></p>
       </div>
     </section>
 
@@ -201,6 +206,6 @@
   </nav>
 
   <div id="toast" class="toast" hidden></div>
-  <script src="app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

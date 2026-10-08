@@ -1,10 +1,11 @@
-/* 衣脉 · App shell 缓存。纯静态，无外部 API。 */
-const VERSION = 'yimai-v2.0.1';
+/* 衣脉 · App shell 缓存。API / CDN 不走 SW。 */
+const VERSION = 'yimai-v3.0.0';
 const SHELL = [
   './',
   'index.html',
   'styles.css',
   'app.js',
+  'config.js',
   'manifest.webmanifest',
   'icons/icon-192.png',
   'icons/icon-512.png',
@@ -27,6 +28,7 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
+  // only same-origin static assets; never cache Supabase / esm.sh
   if (url.origin !== self.location.origin) return;
 
   if (req.mode === 'navigate') {
