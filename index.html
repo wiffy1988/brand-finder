@@ -15,7 +15,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="styles.css?v=3.0.4">
+  <link rel="stylesheet" href="styles.css?v=3.0.5">
   <script>
     /* iOS 26 ignores a static theme-color until script writes it.
        Status bar stays black-translucent so the green topbar (not the page)
@@ -24,12 +24,74 @@
       var color = '#1f3a2e';
       var nodes = document.querySelectorAll('meta[name="theme-color"]');
       for (var i = 0; i < nodes.length; i++) nodes[i].setAttribute('content', color);
+      var root = document.documentElement;
       var standalone = false;
       try {
         standalone = window.navigator.standalone === true ||
           window.matchMedia('(display-mode: standalone)').matches;
       } catch (e) {}
-      if (standalone) document.documentElement.classList.add('standalone');
+      if (standalone) root.classList.add('standalone');
+
+      /* Pin an iPhone home-screen shell to the physical screen when 100lvh
+         misses it by about a safe-area inset. Equal values leave the CSS
+         height alone, so a two-card list still fills a correct 100lvh. */
+      function shellHeight(cssHeight, screenHeight, innerHeight) {
+        if (!(screenHeight > 0) || !(cssHeight > 100)) return null;
+        var delta = screenHeight - cssHeight;
+        /* Cap only when the shell is taller than both the glass and the
+           window. A short screen.height must not shrink a shell the window
+           already shows in full. */
+        if (delta < -1 && innerHeight > 0 && innerHeight < cssHeight - 1) {
+          return Math.round(screenHeight);
+        }
+        if (delta > 1 && delta <= 160) return Math.round(screenHeight);
+        return null;
+      }
+
+      function iosStandalone() {
+        if (!standalone) return false;
+        var ua = navigator.userAgent || '';
+        if (/iPhone|iPad|iPod/.test(ua)) return true;
+        return navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
+      }
+
+      function readCssHeight() {
+        var raw = getComputedStyle(root).getPropertyValue('--lvh').trim();
+        if (raw.length > 2 && raw.slice(-2) === 'px') {
+          var n = parseFloat(raw);
+          if (n > 100) return n;
+        }
+        if (root.style.height) return null;
+        return root.getBoundingClientRect().height;
+      }
+
+      function applyShell() {
+        if (!iosStandalone()) return;
+        var cssHeight = readCssHeight();
+        if (cssHeight == null) return;
+        var next = shellHeight(cssHeight, window.screen.height, window.innerHeight);
+        if (next == null) {
+          if (!root.style.height) return;
+          root.style.height = '';
+          root.style.maxHeight = '';
+          root.style.minHeight = '';
+          return;
+        }
+        var px = next + 'px';
+        if (root.style.height === px) return;
+        root.style.height = px;
+        root.style.maxHeight = px;
+        root.style.minHeight = '0px';
+      }
+
+      function schedule() { applyShell(); }
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', schedule);
+      } else {
+        schedule();
+      }
+      window.addEventListener('resize', schedule);
+      window.addEventListener('orientationchange', schedule);
     })();
   </script>
 </head>
@@ -117,7 +179,7 @@
       <div class="card">
         <h2>关于</h2>
         <p class="hint">衣脉是个人品牌知识库，不调用 AI 识图。适合记录外贸市场淘到的冷门户外品牌故事、价位参考和成衣照片。</p>
-        <p class="hint">版本 <span id="app-version">3.0.4</span></p>
+        <p class="hint">版本 <span id="app-version">3.0.5</span></p>
       </div>
     </section>
 
@@ -230,6 +292,6 @@
   </div>
 
   <div id="toast" class="toast" hidden></div>
-  <script type="module" src="app.js?v=3.0.4"></script>
+  <script type="module" src="app.js?v=3.0.5"></script>
 </body>
 </html>
