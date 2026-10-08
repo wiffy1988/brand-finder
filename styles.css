@@ -43,17 +43,26 @@ body {
   line-height: 1.55;
   -webkit-text-size-adjust: 100%;
 }
-/* Home-screen iOS reports 100% / 100svh / 100dvh / -webkit-fill-available
-   one top-inset short of the glass (852 screen − 59 status = 793). The
-   shell then stops above the physical bottom and the page cream shows
-   under the tab bar. 100lvh is the full screen; children fill that, so
-   the bar's own padding — not a gap outside it — covers the home indicator.
-   Scoped to standalone: in a Safari tab 100lvh is the toolbars-retracted
-   height and would push the bar off the visible page. Do not shift the
-   bar with a negative bottom; that extension is clipped. */
+/* Home-screen shell is exactly one large viewport, not max(100dvh, 100lvh).
+   The earlier min-height: 100dvh stays on html unless cleared. CSS lets
+   min-height beat max-height, so a larger dvh stretches the column and the
+   extra pixels show up as more empty main — or the nav is clipped.
+   100lvh is the full glass (100dvh / 100svh are one status-bar short).
+   Safari tabs stay on 100dvh above: 100lvh there is the toolbars-retracted
+   height. Do not pad the bar by the top inset; its own safe-area-inset-bottom
+   already paints the home indicator. A two-card list leaves empty main.
+   That beige is the list, not a gap under the bar. */
+@property --lvh {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
 html.standalone {
+  --lvh: 100lvh;
   height: 100vh;
   height: 100lvh;
+  min-height: 0;
+  max-height: 100vh;
   max-height: 100lvh;
   overflow: hidden;
 }
@@ -66,8 +75,11 @@ html.standalone body {
 }
 @media (display-mode: standalone) {
   html {
+    --lvh: 100lvh;
     height: 100vh;
     height: 100lvh;
+    min-height: 0;
+    max-height: 100vh;
     max-height: 100lvh;
     overflow: hidden;
   }
