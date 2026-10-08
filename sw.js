@@ -1,10 +1,10 @@
 /* 衣脉 · App shell 缓存。API / CDN 不走 SW。 */
-const VERSION = 'yimai-v3.0.0';
+const VERSION = 'yimai-v3.0.1';
 const SHELL = [
   './',
   'index.html',
-  'styles.css',
-  'app.js',
+  'styles.css?v=3.0.1',
+  'app.js?v=3.0.1',
   'config.js',
   'manifest.webmanifest',
   'icons/icon-192.png',
