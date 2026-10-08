@@ -217,7 +217,7 @@ async function getFind(id) {
   return data ? mapFind(data) : null;
 }
 
-const SOS_SAMPLE = {
+const SOS_SEED = {
   name: 'SOS · Sportswear of Sweden',
   country: '瑞典',
   founded_year: '1982',
@@ -229,14 +229,14 @@ const SOS_SAMPLE = {
     '2011 年，在丹麦代理 SOS 多年的 Ole Damm 买下了全球品牌权，总部也搬到了丹麦。他说 SOS 从 1985 年起就是他的「心头宝」。\n\n' +
     '80 年代 SOS 就以大胆、张扬的配色出名，口号是 “Rethink your life in color”。2009 年赞助过瑞典国家雪上技巧队，被滑雪选手称为「一个代表快乐的叛逆滑雪品牌」。',
   interesting:
-    '标识很好认：白色三角大 logo。防风针织衫是代表品类之一：外层羊毛+腈纶，里面有防风内衬，拉链常用 YKK。\n\n（这是示例品牌，可以随时删除。）',
+    '标识很好认：白色三角大 logo。防风针织衫是代表品类之一：外层羊毛+腈纶，里面有防风内衬，拉链常用 YKK。',
   price_notes: '防风针织衫（如 Tignes）官网正价大约 ¥1350–1500；欧洲店打折后常见 ¥840–1240。抓绒、羽绒具体看款，市场尾货价格另计。',
-  tags: ['滑雪', '瑞典', '针织', '防风', '户外', 'SOS', '示例'],
+  tags: ['滑雪', '瑞典', '针织', '防风', '户外', 'SOS'],
 };
 
 async function ensureSeed() {
   if (brandsCache.length > 0) return;
-  const { error } = await supabase.from('brands').insert(SOS_SAMPLE);
+  const { error } = await supabase.from('brands').insert(SOS_SEED);
   if (error) throw error;
   await loadAll();
 }

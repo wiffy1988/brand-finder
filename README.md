@@ -11,7 +11,7 @@
 - **备份（可选）**：导出 / 导入 JSON
 - **PWA**：Safari「添加到主屏幕」
 
-内置示例品牌：**SOS · Sportswear of Sweden**（仅在 brands 表为空时自动写入）。
+空库时会写入一条普通品牌记录：**SOS · Sportswear of Sweden**（不是可删示例）。
 
 ## 部署前：配置 Supabase（必做）
 
@@ -22,7 +22,7 @@
    - 否则：Storage → New bucket → 名称 `finds` → Public bucket 打开 → Create  
    - 再在 SQL Editor 把 schema 文件里 storage policies 那几段单独跑一遍（或整份重跑，幂等）
 4. 打开站点：https://wiffy1988.github.io/brand-finder/  
-   应能看到 SOS 示例。若顶部黄条提示表不存在，说明 SQL 还没跑成功。
+   应能看到 SOS。若顶部黄条提示表不存在，说明 SQL 还没跑成功。
 
 ### 安全说明（个人单用户）
 
