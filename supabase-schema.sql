@@ -30,11 +30,15 @@ create table if not exists public.brands (
 create table if not exists public.finds (
   id uuid primary key default gen_random_uuid(),
   brand_id uuid references public.brands(id) on delete set null,
+  shop_number text,
   notes text,
   found_at date,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Existing databases: create table if not exists will not add columns.
+alter table public.finds add column if not exists shop_number text;
 
 create table if not exists public.find_photos (
   id uuid primary key default gen_random_uuid(),
