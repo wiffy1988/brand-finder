@@ -2,13 +2,14 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { SUPABASE_URL, SUPABASE_ANON_KEY, STORAGE_BUCKET } from './config.js';
 
-const APP_VERSION = '3.0.5';
+const APP_VERSION = '3.0.6';
 const MAX_FIND_PHOTOS = 12;
 const IMG_MAX_EDGE = 1600;
 const IMG_QUALITY = 0.85;
 const LOCAL_CACHE_KEY = 'yimai-list-cache-v1';
 const BRAND_COLUMNS = 'id,name,country,founded_year,founder,positioning,story,interesting,price_notes,tags,cover_path,created_at,updated_at';
-const FIND_COLUMNS = 'id,brand_id,notes,found_at,created_at,updated_at';
+const FIND_COLUMNS = 'id,brand_id,shop_number,notes,found_at,created_at,updated_at';
+const FIND_COLUMNS_LEGACY = 'id,brand_id,notes,found_at,created_at,updated_at';
 const PHOTO_COLUMNS = 'id,find_id,storage_path,sort_order';
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -49,10 +50,20 @@ function publicUrl(path) {
   return data && data.publicUrl ? data.publicUrl : null;
 }
 
+function isMissingShopColumn(err) {
+  const msg = (err && (err.message || err.error_description || err.details)) || '';
+  const code = (err && err.code) || '';
+  const blob = `${msg} ${code}`;
+  return /shop_number/i.test(blob) && /does not exist|schema cache|PGRST204|42703/i.test(blob);
+}
+
 function netErr(err) {
   const msg = (err && (err.message || err.error_description || err.error)) || String(err || '网络错误');
   if (/Failed to fetch|NetworkError|fetch/i.test(msg)) {
     return '网络连接失败，请检查网络或稍后再试';
+  }
+  if (isMissingShopColumn(err)) {
+    return '还没有店铺号字段：请在 Supabase SQL Editor 运行 supabase-migration-shop-number.sql';
   }
   if (/Could not find the table|relation .* does not exist|PGRST205|404/i.test(msg)) {
     return '云端表还没建好：请先在 Supabase SQL Editor 运行 supabase-schema.sql';
@@ -101,6 +112,7 @@ function mapFind(row) {
   return {
     id: row.id,
     brandId: row.brand_id || null,
+    shopNumber: row.shop_number || '',
     notes: row.notes || '',
     date: row.found_at || '',
     photos: photos.map((p) => ({
@@ -196,6 +208,7 @@ function hydrateLocalCache() {
     brandsCache = data.brands.filter((b) => b && b.id);
     findsCache = data.finds.filter((f) => f && f.id).map((f) => ({
       ...f,
+      shopNumber: f.shopNumber || '',
       photos: Array.isArray(f.photos) ? f.photos : [],
     }));
     return true;
@@ -211,11 +224,18 @@ function sortFinds() {
   );
 }
 
+async function fetchFinds() {
+  const ordered = (cols) => supabase.from('finds').select(cols).order('found_at', { ascending: false });
+  const res = await ordered(FIND_COLUMNS);
+  if (res.error && isMissingShopColumn(res.error)) return ordered(FIND_COLUMNS_LEGACY);
+  return res;
+}
+
 async function loadAll() {
   const gen = ++loadGen;
   const [brandsRes, findsRes, photosRes] = await Promise.all([
     supabase.from('brands').select(BRAND_COLUMNS).order('updated_at', { ascending: false }),
-    supabase.from('finds').select(FIND_COLUMNS).order('found_at', { ascending: false }),
+    fetchFinds(),
     supabase.from('find_photos').select(PHOTO_COLUMNS).order('sort_order', { ascending: true }),
   ]);
   if (brandsRes.error) throw brandsRes.error;
@@ -363,12 +383,21 @@ function findMatches(f, q, brandMap) {
   if (!q) return true;
   const brand = f.brandId ? brandMap.get(f.brandId) : null;
   const hay = [
-    f.notes, f.date,
+    f.shopNumber, f.notes, f.date,
     brand ? brand.name : '',
     brand ? brand.country : '',
     brand ? (brand.tags || []).join(' ') : '',
   ].join(' ').toLowerCase();
   return q.split(/\s+/).every((w) => hay.includes(w));
+}
+
+function findMetaLine(f, noteLen, emptyDateLabel) {
+  const parts = [];
+  if (f.date) parts.push(f.date);
+  else if (emptyDateLabel) parts.push(emptyDateLabel);
+  if (f.shopNumber) parts.push('店铺号 ' + f.shopNumber);
+  if (f.notes) parts.push(String(f.notes).slice(0, noteLen));
+  return parts.join(' · ');
 }
 
 // ---------- Brand UI ----------
@@ -454,12 +483,16 @@ async function openBrandDetail(id, replaceTop) {
     const items = [];
     for (const f of finds) {
       const thumb = f.photos[0] ? publicUrl(f.photos[0].path) : null;
+      const subBits = [];
+      if (f.shopNumber) subBits.push('店铺号 ' + f.shopNumber);
+      if (f.notes) subBits.push(String(f.notes).slice(0, 60));
+      const sub = subBits.join(' · ') || `${f.photos.length} 张照片`;
       items.push(`
         <button type="button" class="list-item" data-open-find="${esc(f.id)}">
           <div class="list-thumb">${thumb ? `<img src="${thumb}" alt="">` : '🧥'}</div>
           <div class="list-body">
             <div class="list-title">${esc(f.date || '未注日期')}</div>
-            <p class="list-sub">${esc((f.notes || '').slice(0, 60) || `${f.photos.length} 张照片`)}</p>
+            <p class="list-sub">${esc(sub)}</p>
           </div>
         </button>`);
     }
@@ -692,7 +725,7 @@ async function renderFindsList(opts) {
         <div class="list-thumb">${thumb ? `<img src="${thumb}" alt="">` : '🧥'}</div>
         <div class="list-body">
           <div class="list-title">${esc(brand ? brand.name : '未关联品牌')}</div>
-          <p class="list-sub">${esc(f.date || '未注日期')}${(f.notes ? ' · ' + f.notes.slice(0, 40) : '')}</p>
+          <p class="list-sub">${esc(findMetaLine(f, 40, '未注日期'))}</p>
           <p class="list-meta">${f.photos.length} 张照片</p>
         </div>
       </button>`);
@@ -735,10 +768,12 @@ async function openFindDetail(id, replaceTop) {
       <h2 class="detail-name">${esc(brand ? brand.name : '未关联品牌')}</h2>
       <p class="detail-sub">${esc(f.date || '未注日期')}</p>
       <div class="detail-actions">
-        <button class="btn small" data-edit-find="${esc(id)}">编辑</button>
-        ${brand ? `<button class="btn small" data-open-brand="${esc(brand.id)}">查看品牌</button>` : ''}
+        <button type="button" class="btn small" data-edit-find="${esc(id)}">编辑</button>
+        ${brand ? `<button type="button" class="btn small" data-open-brand="${esc(brand.id)}">查看品牌</button>` : ''}
+        <button type="button" class="btn small danger" data-delete-find="${esc(id)}">删除</button>
       </div>
     </div>
+    ${f.shopNumber ? `<div class="card detail-section"><h3>店铺号</h3><div class="body">${esc(f.shopNumber)}</div></div>` : ''}
     ${photos.length ? `
       <div class="card">
         <h3>照片 · ${photos.length}</h3>
@@ -777,6 +812,7 @@ async function openFindEdit(id, presetBrandId) {
 
   $('ff-title').textContent = isNew ? '新淘货' : '编辑淘货';
   $('ff-id').value = id || '';
+  $('ff-shop').value = f ? (f.shopNumber || '') : '';
   $('ff-date').value = f ? (f.date || todayISO()) : todayISO();
   $('ff-notes').value = f ? (f.notes || '') : '';
   $('ff-delete').hidden = isNew;
@@ -833,17 +869,18 @@ async function saveFind(ev) {
   }
 
   try {
+    const shopNumber = $('ff-shop').value.trim();
     const findRow = {
       id,
       brand_id: $('ff-brand').value || null,
+      shop_number: shopNumber || null,
       found_at: $('ff-date').value || todayISO(),
       notes: $('ff-notes').value.trim() || null,
       updated_at: new Date().toISOString(),
     };
     if (!existingId) findRow.created_at = new Date().toISOString();
 
-    const { error: fErr } = await supabase.from('finds').upsert(findRow);
-    if (fErr) throw fErr;
+    await writeFindRow(findRow, 'upsert');
 
     const keepIds = new Set();
     const photoRows = [];
@@ -900,13 +937,69 @@ async function saveFind(ev) {
   }
 }
 
-async function deleteFindById(id) {
-  const f = await getFind(id);
-  if (f && f.photos.length) {
-    await removeStoragePaths(f.photos.map((p) => p.path));
+async function writeFindRow(row, mode) {
+  const op = mode === 'insert' ? 'insert' : 'upsert';
+  let { error } = await supabase.from('finds')[op](row);
+  if (error && isMissingShopColumn(error)) {
+    if (row.shop_number) throw error;
+    const legacy = { ...row };
+    delete legacy.shop_number;
+    ({ error } = await supabase.from('finds')[op](legacy));
   }
+  if (error) throw error;
+}
+
+async function listFindStoragePaths(id) {
+  const prefix = `finds/${id}`;
+  try {
+    const { data, error } = await supabase.storage.from(STORAGE_BUCKET).list(prefix, { limit: 100 });
+    if (error || !data) {
+      if (error) console.warn('storage list', error);
+      return [];
+    }
+    return data
+      .filter((obj) => obj && obj.id && obj.name && obj.name !== '.emptyFolderPlaceholder')
+      .map((obj) => `${prefix}/${obj.name}`);
+  } catch (err) {
+    console.warn('storage list', err);
+    return [];
+  }
+}
+
+async function deleteFindById(id) {
+  let photoPaths = [];
+  try {
+    const f = await getFind(id);
+    if (f && f.photos && f.photos.length) photoPaths = f.photos.map((p) => p.path).filter(Boolean);
+  } catch (err) {
+    console.warn('load find before delete', err);
+  }
+  const listed = await listFindStoragePaths(id);
+  await removeStoragePaths([...new Set([...photoPaths, ...listed])]);
   const { error } = await supabase.from('finds').delete().eq('id', id);
   if (error) throw error;
+}
+
+async function confirmDeleteFind(id) {
+  if (!id) return;
+  if (!confirm('删除这条淘货记录？照片也会一起删除。')) return;
+  try {
+    await deleteFindById(id);
+    loadGen++;
+    findsCache = findsCache.filter((f) => f.id !== id);
+    persistLocalCache();
+    clearFindPhotosPending();
+    try {
+      await refreshCaches();
+    } catch {
+      // row is already gone locally; banner explains a failed refresh
+    }
+    toast('已删除');
+    stack = [];
+    showTab('finds');
+  } catch (err) {
+    toast(netErr(err));
+  }
 }
 
 // ---------- Search ----------
@@ -956,7 +1049,7 @@ async function runSearch() {
           <div class="list-thumb">${thumb ? `<img src="${thumb}" alt="">` : '🧥'}</div>
           <div class="list-body">
             <div class="list-title">${esc(brand ? brand.name : '未关联品牌')}</div>
-            <p class="list-sub">${esc(f.date || '')}${(f.notes ? ' · ' + f.notes.slice(0, 40) : '')}</p>
+            <p class="list-sub">${esc(findMetaLine(f, 40))}</p>
           </div>
         </button>`);
     }
@@ -1048,13 +1141,13 @@ async function importBackup(file) {
 
     for (const f of data.finds) {
       const fid = f.id || uid();
-      const { error } = await supabase.from('finds').insert({
+      await writeFindRow({
         id: fid,
         brand_id: f.brandId || f.brand_id || null,
+        shop_number: f.shopNumber || f.shop_number || null,
         notes: f.notes || null,
         found_at: f.date || f.found_at || null,
-      });
-      if (error) throw error;
+      }, 'insert');
 
       const photos = f.photos || [];
       // legacy IndexedDB backup: photoIds + separate photos array with dataURL
@@ -1265,23 +1358,7 @@ function wire() {
     }
   });
 
-  $('ff-delete').addEventListener('click', async () => {
-    const id = $('ff-id').value;
-    if (!id) return;
-    if (!confirm('删除这条淘货记录？')) return;
-    try {
-      await deleteFindById(id);
-      loadGen++;
-      findsCache = findsCache.filter((f) => f.id !== id);
-      persistLocalCache();
-      clearFindPhotosPending();
-      toast('已删除');
-      stack = [];
-      showTab('finds');
-    } catch (err) {
-      toast(netErr(err));
-    }
-  });
+  $('ff-delete').addEventListener('click', () => confirmDeleteFind($('ff-id').value));
 
   async function onCoverFile(file) {
     if (!file) return;
@@ -1331,7 +1408,7 @@ function wire() {
   }
 
   document.body.addEventListener('click', async (e) => {
-    const t = e.target.closest('[data-action],[data-open-brand],[data-open-find],[data-edit-brand],[data-edit-find],[data-new-find-for],[data-copy-brand],[data-remove-cover],[data-remove-find-photo],[data-lightbox]');
+    const t = e.target.closest('[data-action],[data-open-brand],[data-open-find],[data-edit-brand],[data-edit-find],[data-delete-find],[data-new-find-for],[data-copy-brand],[data-remove-cover],[data-remove-find-photo],[data-lightbox]');
     if (!t) return;
 
     if (t.dataset.action === 'new-brand') { openBrandEdit(null); return; }
@@ -1340,6 +1417,7 @@ function wire() {
     if (t.dataset.openFind) { await openFindDetail(t.dataset.openFind); return; }
     if (t.dataset.editBrand) { await openBrandEdit(t.dataset.editBrand); return; }
     if (t.dataset.editFind) { await openFindEdit(t.dataset.editFind); return; }
+    if (t.dataset.deleteFind) { await confirmDeleteFind(t.dataset.deleteFind); return; }
     if (t.dataset.newFindFor) { await openFindEdit(null, t.dataset.newFindFor); return; }
     if (t.dataset.copyBrand) { await copyBrandText(t.dataset.copyBrand); return; }
     if (t.hasAttribute('data-remove-cover')) {
