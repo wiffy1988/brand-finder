@@ -229,6 +229,11 @@ textarea { resize: vertical; min-height: 72px; }
   font-size: 28px; color: var(--brand);
 }
 .list-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.list-thumb.logo {
+  background: #fff;
+  box-shadow: inset 0 0 0 1px rgba(31, 58, 46, 0.08);
+}
+.list-thumb.logo img { object-fit: contain; object-position: center; }
 .list-body { flex: 1; min-width: 0; }
 .list-title { font-weight: 600; font-size: 16px; margin: 0 0 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .list-sub { color: var(--muted); font-size: 13px; margin: 0; }
@@ -255,6 +260,8 @@ textarea { resize: vertical; min-height: 72px; }
 .photo-grid.single:empty::before { padding: 40px 0; }
 .thumb { position: relative; aspect-ratio: 1; border-radius: 10px; overflow: hidden; background: #ddd; }
 .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb.logo { background: #fff; }
+.thumb.logo img { object-fit: contain; object-position: center; }
 .thumb button {
   position: absolute; top: 4px; right: 4px; width: 26px; height: 26px; border-radius: 13px;
   border: 0; background: rgba(0,0,0,.6); color: #fff; font-size: 15px; line-height: 26px;
@@ -266,11 +273,12 @@ textarea { resize: vertical; min-height: 72px; }
 }
 .detail-cover {
   width: 88px; height: 88px; border-radius: 14px; overflow: hidden;
-  background: var(--brand-soft); flex: none;
+  background: #fff; flex: none;
   display: flex; align-items: center; justify-content: center;
   font-size: 36px; color: var(--brand);
+  box-shadow: inset 0 0 0 1px rgba(31, 58, 46, 0.08);
 }
-.detail-cover img { width: 100%; height: 100%; object-fit: cover; }
+.detail-cover img { width: 100%; height: 100%; object-fit: contain; object-position: center; }
 .detail-name { font-size: 22px; font-weight: 700; margin: 0; line-height: 1.25; }
 .detail-sub { color: var(--muted); font-size: 14px; margin: 4px 0 0; }
 .detail-section { margin-top: 4px; }

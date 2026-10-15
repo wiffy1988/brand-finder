@@ -2,7 +2,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { SUPABASE_URL, SUPABASE_ANON_KEY, STORAGE_BUCKET } from './config.js';
 
-const APP_VERSION = '3.0.7';
+const APP_VERSION = '3.0.8';
 const MAX_FIND_PHOTOS = 12;
 const IMG_MAX_EDGE = 1600;
 const IMG_QUALITY = 0.85;
@@ -453,7 +453,7 @@ async function renderBrandsList(opts) {
     ).join('');
     parts.push(`
       <button type="button" class="list-item" data-open-brand="${esc(b.id)}">
-        <div class="list-thumb">${cover ? `<img src="${cover}" alt="">` : '🏷'}</div>
+        <div class="list-thumb logo">${cover ? `<img src="${cover}" alt="">` : '🏷'}</div>
         <div class="list-body">
           <div class="list-title">${esc(b.name)}</div>
           <p class="list-sub">${esc(sub || b.positioning || '—')}${b.isSample ? ' · 示例可删' : ''}</p>
@@ -604,7 +604,7 @@ async function renderCoverPreview() {
     grid.innerHTML = '';
     return;
   }
-  grid.innerHTML = `<div class="thumb"><img src="${url}" alt=""><button type="button" aria-label="删除" data-remove-cover>×</button></div>`;
+  grid.innerHTML = `<div class="thumb logo"><img src="${url}" alt=""><button type="button" aria-label="删除" data-remove-cover>×</button></div>`;
 }
 
 async function saveBrand(ev) {
@@ -1059,7 +1059,7 @@ async function runSearch() {
       const cover = publicUrl(b.coverPath);
       parts.push(`
         <button type="button" class="list-item" data-open-brand="${esc(b.id)}">
-          <div class="list-thumb">${cover ? `<img src="${cover}" alt="">` : '🏷'}</div>
+          <div class="list-thumb logo">${cover ? `<img src="${cover}" alt="">` : '🏷'}</div>
           <div class="list-body">
             <div class="list-title">${esc(b.name)}</div>
             <p class="list-sub">${esc([b.country, b.positioning].filter(Boolean).join(' · ') || '—')}</p>
