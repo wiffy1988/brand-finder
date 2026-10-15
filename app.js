@@ -2,13 +2,14 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { SUPABASE_URL, SUPABASE_ANON_KEY, STORAGE_BUCKET } from './config.js';
 
-const APP_VERSION = '3.0.6';
+const APP_VERSION = '3.0.8';
 const MAX_FIND_PHOTOS = 12;
 const IMG_MAX_EDGE = 1600;
 const IMG_QUALITY = 0.85;
 const LOCAL_CACHE_KEY = 'yimai-list-cache-v1';
 const BRAND_COLUMNS = 'id,name,country,founded_year,founder,positioning,story,interesting,price_notes,tags,cover_path,created_at,updated_at';
-const FIND_COLUMNS = 'id,brand_id,shop_number,notes,found_at,created_at,updated_at';
+const FIND_COLUMNS = 'id,brand_id,shop_number,price,notes,found_at,created_at,updated_at';
+const FIND_COLUMNS_NO_PRICE = 'id,brand_id,shop_number,notes,found_at,created_at,updated_at';
 const FIND_COLUMNS_LEGACY = 'id,brand_id,notes,found_at,created_at,updated_at';
 const PHOTO_COLUMNS = 'id,find_id,storage_path,sort_order';
 
@@ -57,10 +58,21 @@ function isMissingShopColumn(err) {
   return /shop_number/i.test(blob) && /does not exist|schema cache|PGRST204|42703/i.test(blob);
 }
 
+function isMissingPriceColumn(err) {
+  const msg = (err && (err.message || err.error_description || err.details)) || '';
+  const code = (err && err.code) || '';
+  const blob = `${msg} ${code}`;
+  // \b so brands.price_notes does not look like finds.price
+  return /\bprice\b/i.test(blob) && /does not exist|schema cache|PGRST204|42703/i.test(blob);
+}
+
 function netErr(err) {
   const msg = (err && (err.message || err.error_description || err.error)) || String(err || '网络错误');
   if (/Failed to fetch|NetworkError|fetch/i.test(msg)) {
     return '网络连接失败，请检查网络或稍后再试';
+  }
+  if (isMissingPriceColumn(err)) {
+    return '还没有价格字段：请在 Supabase SQL Editor 运行 supabase-migration-price.sql';
   }
   if (isMissingShopColumn(err)) {
     return '还没有店铺号字段：请在 Supabase SQL Editor 运行 supabase-migration-shop-number.sql';
@@ -113,6 +125,7 @@ function mapFind(row) {
     id: row.id,
     brandId: row.brand_id || null,
     shopNumber: row.shop_number || '',
+    price: row.price || '',
     notes: row.notes || '',
     date: row.found_at || '',
     photos: photos.map((p) => ({
@@ -209,6 +222,7 @@ function hydrateLocalCache() {
     findsCache = data.finds.filter((f) => f && f.id).map((f) => ({
       ...f,
       shopNumber: f.shopNumber || '',
+      price: f.price || '',
       photos: Array.isArray(f.photos) ? f.photos : [],
     }));
     return true;
@@ -226,7 +240,8 @@ function sortFinds() {
 
 async function fetchFinds() {
   const ordered = (cols) => supabase.from('finds').select(cols).order('found_at', { ascending: false });
-  const res = await ordered(FIND_COLUMNS);
+  let res = await ordered(FIND_COLUMNS);
+  if (res.error && isMissingPriceColumn(res.error)) res = await ordered(FIND_COLUMNS_NO_PRICE);
   if (res.error && isMissingShopColumn(res.error)) return ordered(FIND_COLUMNS_LEGACY);
   return res;
 }
@@ -383,7 +398,7 @@ function findMatches(f, q, brandMap) {
   if (!q) return true;
   const brand = f.brandId ? brandMap.get(f.brandId) : null;
   const hay = [
-    f.shopNumber, f.notes, f.date,
+    f.shopNumber, f.price, f.notes, f.date,
     brand ? brand.name : '',
     brand ? brand.country : '',
     brand ? (brand.tags || []).join(' ') : '',
@@ -396,6 +411,7 @@ function findMetaLine(f, noteLen, emptyDateLabel) {
   if (f.date) parts.push(f.date);
   else if (emptyDateLabel) parts.push(emptyDateLabel);
   if (f.shopNumber) parts.push('店铺号 ' + f.shopNumber);
+  if (f.price) parts.push('价格 ' + f.price);
   if (f.notes) parts.push(String(f.notes).slice(0, noteLen));
   return parts.join(' · ');
 }
@@ -437,7 +453,7 @@ async function renderBrandsList(opts) {
     ).join('');
     parts.push(`
       <button type="button" class="list-item" data-open-brand="${esc(b.id)}">
-        <div class="list-thumb">${cover ? `<img src="${cover}" alt="">` : '🏷'}</div>
+        <div class="list-thumb logo">${cover ? `<img src="${cover}" alt="">` : '🏷'}</div>
         <div class="list-body">
           <div class="list-title">${esc(b.name)}</div>
           <p class="list-sub">${esc(sub || b.positioning || '—')}${b.isSample ? ' · 示例可删' : ''}</p>
@@ -485,6 +501,7 @@ async function openBrandDetail(id, replaceTop) {
       const thumb = f.photos[0] ? publicUrl(f.photos[0].path) : null;
       const subBits = [];
       if (f.shopNumber) subBits.push('店铺号 ' + f.shopNumber);
+      if (f.price) subBits.push('价格 ' + f.price);
       if (f.notes) subBits.push(String(f.notes).slice(0, 60));
       const sub = subBits.join(' · ') || `${f.photos.length} 张照片`;
       items.push(`
@@ -587,7 +604,7 @@ async function renderCoverPreview() {
     grid.innerHTML = '';
     return;
   }
-  grid.innerHTML = `<div class="thumb"><img src="${url}" alt=""><button type="button" aria-label="删除" data-remove-cover>×</button></div>`;
+  grid.innerHTML = `<div class="thumb logo"><img src="${url}" alt=""><button type="button" aria-label="删除" data-remove-cover>×</button></div>`;
 }
 
 async function saveBrand(ev) {
@@ -774,6 +791,7 @@ async function openFindDetail(id, replaceTop) {
       </div>
     </div>
     ${f.shopNumber ? `<div class="card detail-section"><h3>店铺号</h3><div class="body">${esc(f.shopNumber)}</div></div>` : ''}
+    ${f.price ? `<div class="card detail-section"><h3>价格</h3><div class="body">${esc(f.price)}</div></div>` : ''}
     ${photos.length ? `
       <div class="card">
         <h3>照片 · ${photos.length}</h3>
@@ -813,6 +831,7 @@ async function openFindEdit(id, presetBrandId) {
   $('ff-title').textContent = isNew ? '新淘货' : '编辑淘货';
   $('ff-id').value = id || '';
   $('ff-shop').value = f ? (f.shopNumber || '') : '';
+  $('ff-price').value = f ? (f.price || '') : '';
   $('ff-date').value = f ? (f.date || todayISO()) : todayISO();
   $('ff-notes').value = f ? (f.notes || '') : '';
   $('ff-delete').hidden = isNew;
@@ -870,10 +889,12 @@ async function saveFind(ev) {
 
   try {
     const shopNumber = $('ff-shop').value.trim();
+    const price = $('ff-price').value.trim();
     const findRow = {
       id,
       brand_id: $('ff-brand').value || null,
       shop_number: shopNumber || null,
+      price: price || null,
       found_at: $('ff-date').value || todayISO(),
       notes: $('ff-notes').value.trim() || null,
       updated_at: new Date().toISOString(),
@@ -939,12 +960,19 @@ async function saveFind(ev) {
 
 async function writeFindRow(row, mode) {
   const op = mode === 'insert' ? 'insert' : 'upsert';
-  let { error } = await supabase.from('finds')[op](row);
+  let payload = row;
+  let { error } = await supabase.from('finds')[op](payload);
+  if (error && isMissingPriceColumn(error)) {
+    if (payload.price) throw error;
+    payload = { ...payload };
+    delete payload.price;
+    ({ error } = await supabase.from('finds')[op](payload));
+  }
   if (error && isMissingShopColumn(error)) {
-    if (row.shop_number) throw error;
-    const legacy = { ...row };
-    delete legacy.shop_number;
-    ({ error } = await supabase.from('finds')[op](legacy));
+    if (payload.shop_number) throw error;
+    payload = { ...payload };
+    delete payload.shop_number;
+    ({ error } = await supabase.from('finds')[op](payload));
   }
   if (error) throw error;
 }
@@ -1031,7 +1059,7 @@ async function runSearch() {
       const cover = publicUrl(b.coverPath);
       parts.push(`
         <button type="button" class="list-item" data-open-brand="${esc(b.id)}">
-          <div class="list-thumb">${cover ? `<img src="${cover}" alt="">` : '🏷'}</div>
+          <div class="list-thumb logo">${cover ? `<img src="${cover}" alt="">` : '🏷'}</div>
           <div class="list-body">
             <div class="list-title">${esc(b.name)}</div>
             <p class="list-sub">${esc([b.country, b.positioning].filter(Boolean).join(' · ') || '—')}</p>
@@ -1145,6 +1173,7 @@ async function importBackup(file) {
         id: fid,
         brand_id: f.brandId || f.brand_id || null,
         shop_number: f.shopNumber || f.shop_number || null,
+        price: f.price || null,
         notes: f.notes || null,
         found_at: f.date || f.found_at || null,
       }, 'insert');
