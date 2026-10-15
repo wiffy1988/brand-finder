@@ -5,7 +5,7 @@
 ## 功能
 
 - **品牌库**：品牌名、国家/地区、创立年份、创始人/所有者、品牌故事、主打定位、有趣的事、价位参考、标签、可选封面图
-- **淘货**：多张照片（拍照/相册）、关联品牌、店铺号、日期、备注
+- **淘货**：多张照片（拍照/相册）、关联品牌、店铺号、价格、日期、备注
 - **搜索**：按名称、国家、标签、故事全文筛选
 - **云端同步**：同一份 Supabase 数据；换手机打开同一网址即可
 - **备份（可选）**：导出 / 导入 JSON
@@ -22,8 +22,9 @@
    - 否则：Storage → New bucket → 名称 `finds` → Public bucket 打开 → Create  
    - 再在 SQL Editor 把 schema 文件里 storage policies 那几段单独跑一遍（或整份重跑，幂等）
 4. 若库是早就建好的（`finds` 里还没有 `shop_number`），在 SQL Editor 再运行 **`supabase-migration-shop-number.sql`**（一行 `alter table`）。anon key 不能改表结构，只能由你在 Dashboard 里跑。
-5. 打开站点：https://wiffy1988.github.io/brand-finder/  
-   应能看到 SOS。若顶部黄条提示表不存在，说明 SQL 还没跑成功。淘货保存报「还没有店铺号字段」时，补跑第 4 步。
+5. 若 `finds` 里还没有 `price`，再运行 **`supabase-migration-price.sql`**（一行 `alter table ... price text`）。价格按摊位上怎么写就怎么记，例如 `80` 或 `80元`。
+6. 打开站点：https://wiffy1988.github.io/brand-finder/  
+   应能看到 SOS。若顶部黄条提示表不存在，说明 SQL 还没跑成功。淘货保存报「还没有店铺号字段」时，补跑第 4 步；报「还没有价格字段」时，补跑第 5 步。
 
 ### 安全说明（个人单用户）
 

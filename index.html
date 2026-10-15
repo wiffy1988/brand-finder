@@ -15,7 +15,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="styles.css?v=3.0.6">
+  <link rel="stylesheet" href="styles.css?v=3.0.7">
   <script>
     /* iOS 26 ignores a static theme-color until script writes it.
        Status bar stays black-translucent so the green topbar (not the page)
@@ -132,7 +132,7 @@
     <!-- 淘货列表 -->
     <section id="view-finds" class="view" hidden>
       <div class="search-bar">
-        <input id="finds-filter" type="search" placeholder="筛选店铺号、备注、品牌…" enterkeyhint="search">
+        <input id="finds-filter" type="search" placeholder="筛选店铺号、价格、备注、品牌…" enterkeyhint="search">
       </div>
       <div id="finds-list" class="list"></div>
       <div id="finds-empty" class="empty" hidden>
@@ -145,7 +145,7 @@
     <!-- 搜索 -->
     <section id="view-search" class="view" hidden>
       <div class="search-bar sticky">
-        <input id="global-search" type="search" placeholder="搜品牌故事、价位、标签、店铺号、淘货…" autofocus enterkeyhint="search">
+        <input id="global-search" type="search" placeholder="搜品牌故事、价位、标签、店铺号、价格、淘货…" autofocus enterkeyhint="search">
       </div>
       <div id="search-results" class="list"></div>
       <div id="search-empty" class="empty">
@@ -179,7 +179,7 @@
       <div class="card">
         <h2>关于</h2>
         <p class="hint">衣脉是个人品牌知识库，不调用 AI 识图。适合记录外贸市场淘到的冷门户外品牌故事、价位参考和成衣照片。</p>
-        <p class="hint">版本 <span id="app-version">3.0.6</span></p>
+        <p class="hint">版本 <span id="app-version">3.0.7</span></p>
       </div>
     </section>
 
@@ -251,6 +251,8 @@
           </select>
           <label class="field-label" for="ff-shop">店铺号</label>
           <input id="ff-shop" type="text" placeholder="档口 / 摊位号，可空" autocomplete="off">
+          <label class="field-label" for="ff-price">价格</label>
+          <input id="ff-price" type="text" placeholder="例如 80 或 80元，可空" autocomplete="off">
           <label class="field-label" for="ff-date">日期</label>
           <input id="ff-date" type="date">
           <label class="field-label" for="ff-notes">备注</label>
@@ -294,6 +296,6 @@
   </div>
 
   <div id="toast" class="toast" hidden></div>
-  <script type="module" src="app.js?v=3.0.6"></script>
+  <script type="module" src="app.js?v=3.0.7"></script>
 </body>
 </html>
